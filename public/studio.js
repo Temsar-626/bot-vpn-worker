@@ -399,7 +399,7 @@ ACTIONS.vJobAction = async d => {
   await api(`/broadcast/${d.id}/${d.action}`, { method: 'POST' }); await loadHistory();
 };
 
-const V_TABS = [ ['overview','layout-grid',null,['نمای کلی','Overview']], ['services','network','services',['سرویس / VPN','Services / VPN']], ['catalog','package','catalog',['محصولات','Catalog']], ['orders','shopping-bag','shop',['سفارش‌ها','Orders']], ['coupons','ticket-percent','shop',['تخفیف‌ها','Discounts']], ['channel','calendar-clock','channel',['انتشار خودکار','Publishing']], ['groups','shield-check','moderation',['گروه‌ها','Groups']], ['relay','copy','relay',['حذف فوروارد','Relay']], ['crm','trophy','crm',['باشگاه مشتریان','Loyalty']], ['faq','messages-square','faq',['پرسش و پاسخ','FAQ']], ['media','folder-open',null,['رسانه‌ها','Media']] ];
+const V_TABS = [ ['overview','layout-grid',null,['نمای کلی','Overview']], ['services','network','services',['سرویس / VPN','Services / VPN']], ['bpb','cloud','services',['BPB','BPB']], ['catalog','package','catalog',['محصولات','Catalog']], ['orders','shopping-bag','shop',['سفارش‌ها','Orders']], ['coupons','ticket-percent','shop',['تخفیف‌ها','Discounts']], ['channel','calendar-clock','channel',['انتشار خودکار','Publishing']], ['groups','shield-check','moderation',['گروه‌ها','Groups']], ['relay','copy','relay',['حذف فوروارد','Relay']], ['crm','trophy','crm',['باشگاه مشتریان','Loyalty']], ['faq','messages-square','faq',['پرسش و پاسخ','FAQ']], ['media','folder-open',null,['رسانه‌ها','Media']] ];
 function renderStudio() {
   const tabs = V_TABS.filter(t=>!t[2] || vHas(t[2])); if (!tabs.some(t=>t[0] === V2.tab)) V2.tab = 'overview';
   const p = V2.settings?.purposes?.[V2.settings?.botPurpose];
@@ -413,7 +413,7 @@ function vPagination(data) { return `<div class="flex justify-between items-cent
 async function loadStudio() {
   const tab = V2.tab, host = $('v-studio-body'); if (!host) return;
   try {
-    const html = await ({ overview: studioOverview, catalog: studioCatalog, orders: studioOrders, coupons: studioCoupons, channel: studioChannel, groups: studioGroups, relay: studioRelay, crm: studioCRM, faq: studioFAQ, media: studioMedia, services: studioServices })[tab]();
+    const html = await ({ overview: studioOverview, catalog: studioCatalog, orders: studioOrders, coupons: studioCoupons, channel: studioChannel, groups: studioGroups, relay: studioRelay, crm: studioCRM, faq: studioFAQ, media: studioMedia, services: studioServices, bpb: studioBpb })[tab]();
     if (S.route === 'studio' && V2.tab === tab && $('v-studio-body')) { $('v-studio-body').innerHTML = html; refreshIcons(); paintDropdowns(); if (tab === 'channel') loadHistory(); }
   } catch(e) { if (host.isConnected) host.innerHTML = vNote(esc(vError(e.message)),true) + '<div class="mt-4">' + vButton(t('refresh'),'vReload') + '</div>'; }
 }

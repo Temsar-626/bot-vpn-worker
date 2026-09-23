@@ -25,7 +25,7 @@ export function bootPanel({ lang = "fa" } = {}) {
     window.lucide = { createIcons() {} };
     window.fetch = async () => ({ ok: true, status: 200, json: async () => ({ ok: true, data: {} }) });
   `);
-  for (const file of ["panel.js", "studio.js", "services.js"])
+  for (const file of ["panel.js", "studio.js", "services.js", "bpb.js"])
     inject(fs.readFileSync(path.join(PUBLIC, file), "utf8"));
   inject(`S.token = 'test-token'; S.lang = ${JSON.stringify(lang)};`);
   const doc = win.document;

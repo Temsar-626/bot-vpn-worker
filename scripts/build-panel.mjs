@@ -17,7 +17,7 @@ for (const [pkg, file] of [['lucide', 'lucide-LICENSE'], ['@fontsource/vazirmatn
 const version = JSON.parse(fs.readFileSync('package.json', 'utf8')).version;
 const html = fs.readFileSync('public/index.html', 'utf8')
   .replace(/data-panel-version="[^"]*"/, `data-panel-version="${version}"`)
-  .replace(/(\/(?:panel|studio|services)\.(?:css|js))(?:\?v=[^"']*)?/g, `$1?v=${version}`);
+  .replace(/(\/(?:panel|studio|services|bpb)\.(?:css|js))(?:\?v=[^"']*)?/g, `$1?v=${version}`);
 fs.writeFileSync('public/index.html', html);
 
 for (const file of ['public/portal/index.html']) {

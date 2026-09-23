@@ -336,7 +336,6 @@ const SV_TABS = [
   ["requests", "inbox", ["درخواست‌ها", "Requests"]],
   ["coupons", "ticket-percent", ["تخفیف و هدیه", "Promotions"]],
   ["campaigns", "trophy", ["گردونه و قرعه‌کشی", "Rewards"]],
-  ["bpb", "cloud", ["BPB", "BPB"]],
   ["settings", "settings", ["تنظیمات", "Settings"]],
   ["backup", "archive", ["گزارش و پشتیبان", "Reports & backup"]],
 ];
@@ -410,7 +409,6 @@ async function svContent() {
     requests: svRequests,
     coupons: svPromotions,
     campaigns: svCampaigns,
-    bpb: svBpb,
     settings: svSettings,
     backup: svBackup,
   }[SV.tab]();
@@ -1879,109 +1877,3 @@ ACTIONS.svDiceSave = async () => {
   toast(t("saved"), "success");
 };
 
-// ---- BPB (Cloudflare Workers) ----
-const bpbAPI = (path, opts) => api("/bpb" + path, opts);
-const bpbStatus = (s) => ({
-  pending_install: L("در انتظار نصب", "Pending install"),
-  free: L("آزاد", "Free"),
-  sold: L("فروخته‌شده", "Sold"),
-  error: L("خطا", "Error"),
-  disabled: L("غیرفعال", "Disabled"),
-})[s] || s;
-const bpbBadge = (v) => `<span class="v-badge ${["free"].includes(v) ? "good" : ["sold", "pending_install"].includes(v) ? "warn" : ["error"].includes(v) ? "bad" : ""}">${bpbStatus(v)}</span>`;
-async function svBpb() {
-  const [d, def] = await Promise.all([bpbAPI("/accounts"), bpbAPI("/defaults")]);
-  SV.cache.bpb = d.rows;
-  SV.cache.bpbDefaults = def.settings || {};
-  const c = d.counts || {};
-  const s = def.settings || {};
-  const defaultsCard = vSection(
-    L("تنظیمات پیش‌فرض نصب", "Default install settings"),
-    `<div class="grid sm:grid-cols-2 gap-4">${vField("bpb-def-ips", L("Proxy IP / Clean IP (با کاما)", "Proxy IPs (comma-separated)"), (s.proxyIPs || []).join(", "), 'dir="ltr"')}${vSelect("bpb-def-mode", L("حالت Proxy IP", "Proxy IP mode"), [["proxyip", "proxyip"], ["direct", "direct"], ["none", "none"]], s.proxyIpMode || "proxyip")}${vField("bpb-def-fallback", L("Fallback (اختیاری)", "Fallback (optional)"), s.fallback || "", 'dir="ltr"')}${vField("bpb-def-doh", L("DoH URL (اختیاری)", "DoH URL (optional)"), s.dohUrl || "", 'dir="ltr"')}</div><p class="v-meta mt-2">${L("این تنظیمات موقع نصب روی ورکر اعمال می‌شود؛ تنظیمات هر اکانت بر آن غلبه می‌کند.", "Applied at install time; per-account settings override them.")}</p>`,
-    svBtn(t("save"), "bpbDefaultsSave", "", true),
-  );
-  const head = `<div class="v-grid v-stagger">${[["free", c.free || 0, L("اسلات آزاد", "Free slots")], ["sold", c.sold || 0, L("فروخته‌شده", "Sold")], ["error", c.error || 0, L("خطا", "Errors")]].map(([k, n, l]) => `<div class="${CLS.card} p-5"><strong class="block text-2xl">${fmtNum(n)}</strong><span class="v-meta">${l}</span></div>`).join("")}</div>`;
-  const rows = d.rows.length ? d.rows.map((r) => `<div class="v-row"><span class="v-icon">${vIcon("cloud")}</span><div class="v-row-main"><p class="text-sm font-bold">${esc(r.label)} ${bpbBadge(r.status)}</p><p class="v-meta">${esc(r.cf_email || "")} · ${esc(r.worker_name || "")}${r.panel_url ? `<br><span class="v-code" dir="ltr">${esc(r.panel_url)}</span>` : ""}${r.status === "sold" && r.expire_at ? `<br>${L("انقضا", "Expires")}: ${fmtDate(r.expire_at * 1000)}` : ""}${r.last_error ? `<br><span class="text-rose-400">${esc(r.last_error)}</span>` : ""}</p></div><div class="v-actions">${["pending_install", "error"].includes(r.status) ? svBtn(L("نصب", "Install"), "bpbInstall", `data-id="${r.id}"`) : ""}${r.status === "sold" ? svBtn(L("قطع دسترسی", "Revoke"), "bpbRevoke", `data-id="${r.id}"`) : ""}${svBtn(L("حذف", "Delete"), "bpbDelete", `data-id="${r.id}"`)}${r.panel_url ? svBtn(L("تنظیمات", "Settings"), "bpbSettings", `data-id="${r.id}"`) : ""}${r.hasPanelPass ? svBtn(L("پسورد پنل", "Panel password"), "bpbPanelPass", `data-id="${r.id}"`) : ""}${svBtn(L("توکن", "Token"), "bpbToken", `data-id="${r.id}"`)}${svBtn(L("تعویض توکن", "Replace token"), "bpbTokenReplace", `data-id="${r.id}"`)}</div></div>`).join("") : vEmpty(L("اولین اکانت Cloudflare را با API Token اضافه کنید. هر اکانت = یک Worker.", "Add your first Cloudflare account with an API token. One account = one Worker."), "cloud");
-  return svRows(head + defaultsCard + vSection(L("اکانت‌های Cloudflare / اسلات‌های BPB", "Cloudflare accounts / BPB slots"), rows, svBtn(L("اکانت جدید", "New account"), "bpbNew", "", true) + svBtn(L("تنظیمات گروهی", "Bulk settings"), "bpbBulk")) + vNote(L("برای فروش، یک پنل از نوع BPB بسازید و پلن را به آن وصل کنید؛ خرید، اسلات آزاد را می‌گیرد. توکن‌ها plaintext ذخیره می‌شوند — دسترسی ادمین را محدود نگه دارید.", "To sell, create a BPB-type provider and attach plans to it; purchases consume a free slot. Tokens are stored in plaintext — keep admin access restricted."), true));
-}
-ACTIONS.bpbNew = () => vModal(L("اکانت Cloudflare جدید", "New Cloudflare account"), vField("bpb-label", L("نام نمایشی", "Label"), "", 'required maxlength="100"') + vField("bpb-token", L("API Token کلادفلر", "Cloudflare API token"), "", 'type="password" required dir="ltr" autocomplete="new-password"') + vNote(L("دسترسی پیشنهادی: Edit Workers + خواندن Account Settings + KV.", "Suggested scope: edit Workers, read account settings, KV.")), "bpbSave");
-ACTIONS.bpbSave = async () => {
-  await bpbAPI("/accounts", { method: "POST", body: { label: vVal("bpb-label"), apiToken: vVal("bpb-token") } });
-  closeModal(); toast(t("saved"), "success"); SV.html = {}; svRefresh();
-};
-ACTIONS.bpbInstall = async (d, el) => {
-  el.disabled = true;
-  try {
-    const r = await bpbAPI("/accounts/" + d.id + "/install", { method: "POST" });
-    toast(r.account.panel_url || t("saved"), "success");
-    SV.html = {};
-    await svRefresh();
-    // Show the first-open panel password right after install.
-    if (r.account.hasPanelPass) await ACTIONS.bpbPanelPass({ id: d.id });
-  }
-  catch (e) { toast(vError(e.message), "error"); } finally { el.disabled = false; }
-};
-ACTIONS.bpbRevoke = async (d, el) => {
-  if (!(await confirmDlg(L("لینک ساب این اسلات می‌میرد و اسلات آزاد می‌شود. ادامه؟", "The sub link will die and the slot returns to free. Continue?"), L("قطع دسترسی", "Revoke")))) return;
-  el.disabled = true;
-  try { await bpbAPI("/accounts/" + d.id + "/revoke", { method: "POST" }); toast(t("saved"), "success"); SV.html = {}; await svRefresh(); }
-  catch (e) { toast(vError(e.message), "error"); } finally { el.disabled = false; }
-};
-ACTIONS.bpbDelete = async (d) => {
-  const r = (SV.cache.bpb || []).find((x) => x.id === d.id);
-  const sold = r?.status === "sold";
-  if (!(await confirmDlg(sold ? L("این اسلات فروخته‌شده حذف شود؟ لینک خریدار می‌میرد و مبلغ برنمی‌گردد. فقط برای ردیف تستی/خراب استفاده کنید.", "Delete this SOLD slot? The buyer link dies with no refund. Only for test/broken rows.") : L("این اکانت حذف شود؟ (ورکر هم در صورت امکان پاک می‌شود)", "Delete this account? (The worker is removed if reachable)"), t("remove")))) return;
-  await bpbAPI("/accounts/" + d.id, { method: "DELETE", body: sold ? { force: true } : {} });
-  SV.html = {}; svRefresh();
-};
-ACTIONS.bpbTokenReplace = (d) => {
-  SV.edit = { id: d.id };
-  vModal(L("تعویض توکن Cloudflare", "Replace Cloudflare token"), vField("bpb-new-token", L("API Token جدید", "New API token"), "", 'type="password" required dir="ltr" autocomplete="new-password"') + vNote(L("توکن قبلی (حتی اگر با VAULT_KEY قدیمی قفل شده باشد) جایگزین می‌شود و اکانت دوباره قابل مدیریت می‌شود.", "Replaces the previous token — even one locked by a lost VAULT_KEY — and makes the account manageable again.")), "bpbTokenReplaceSave");
-};
-ACTIONS.bpbTokenReplaceSave = async () => {
-  await bpbAPI("/accounts/" + SV.edit.id + "/token", { method: "POST", body: { apiToken: vVal("bpb-new-token") } });
-  closeModal(); toast(t("saved"), "success"); SV.html = {}; svRefresh();
-};
-ACTIONS.bpbToken = async (d) => {
-  const r = await bpbAPI("/accounts/" + d.id + "/token");
-  openModal(
-    `<div class="p-6"><h3 class="font-bold mb-4">${L("توکن Cloudflare", "Cloudflare token")}</h3><textarea readonly dir="ltr" rows="3" class="${CLS.input}">${esc(r.token)}</textarea><p class="v-meta mt-2">${L("این توکن را با کسی به اشتراک نگذارید.", "Do not share this token with anyone.")}</p><div class="mt-4 flex gap-2">${svBtn(t("copy"), "bpbCopyToken", `data-token="${esc(r.token)}"`)}${svBtn(t("close"), "modalClose")}</div></div>`,
-  );
-};
-ACTIONS.bpbCopyToken = async (d) => {
-  try { await navigator.clipboard.writeText(d.token); toast(t("copied"), "success"); }
-  catch { toast(t("errorGeneric"), "error"); }
-};
-ACTIONS.bpbDefaultsSave = async () => {
-  await bpbAPI("/defaults", { method: "PUT", body: { settings: { proxyIPs: vList(vVal("bpb-def-ips")), proxyIpMode: vVal("bpb-def-mode"), fallback: vVal("bpb-def-fallback"), dohUrl: vVal("bpb-def-doh") } } });
-  toast(t("saved"), "success"); SV.html = {}; svRefresh();
-};
-ACTIONS.bpbPanelPass = async (d) => {
-  const r = await bpbAPI("/accounts/" + d.id + "/panel-password");
-  openModal(
-    `<div class="p-6"><h3 class="font-bold mb-4">${L("پسورد پنل BPB", "BPB panel password")}</h3><p class="v-meta mb-2">${L("یوزرنیم", "Username")}: <span class="v-code" dir="ltr">${esc(r.username)}</span></p><textarea readonly dir="ltr" rows="2" class="${CLS.input}">${esc(r.password)}</textarea><p class="v-meta mt-2">${r.seeded ? L("این پسورد موقع نصب داخل پنل ست شده؛ اولین بازدید مستقیم وارد لاگین می‌شوید.", "Pre-seeded at install; first open goes straight to login.") : L("ست خودکار ناموفق بود؛ این پسورد را در اولین بازدید پنل وارد کنید.", "Auto-seed failed; enter this password on first panel open.")}</p><div class="mt-4 flex gap-2">${svBtn(t("copy"), "bpbCopyToken", `data-token="${esc(r.password)}"`)}${svBtn(t("close"), "modalClose")}</div></div>`,
-  );
-};
-ACTIONS.bpbSettings = (d) => {
-  const r = (SV.cache.bpb || []).find((x) => x.id === d.id) || { settings: {} };
-  const s = r.settings || {};
-  SV.edit = { id: d.id };
-  vModal(L("تنظیمات BPB", "BPB settings"), vField("bpb-proxyips", L("Proxy IP / Clean IP (با کاما)", "Proxy IPs (comma-separated)"), (s.proxyIPs || []).join(", "), 'dir="ltr"') + vSelect("bpb-proxymode", L("حالت Proxy IP", "Proxy IP mode"), [["proxyip", "proxyip"], ["direct", "direct"], ["none", "none"]], s.proxyIpMode || "proxyip") + vField("bpb-fallback", L("Fallback (اختیاری)", "Fallback (optional)"), s.fallback || "", 'dir="ltr"') + vField("bpb-doh", L("DoH URL (اختیاری، https)", "DoH URL (optional, https)"), s.dohUrl || "", 'dir="ltr"'), "bpbSettingsSave");
-};
-ACTIONS.bpbSettingsSave = async () => {
-  await bpbAPI("/accounts/" + SV.edit.id + "/settings", { method: "PUT", body: { settings: { proxyIPs: vList(vVal("bpb-proxyips")), proxyIpMode: vVal("bpb-proxymode"), fallback: vVal("bpb-fallback"), dohUrl: vVal("bpb-doh") } } });
-  closeModal(); toast(t("saved"), "success"); SV.html = {}; svRefresh();
-};
-ACTIONS.bpbBulk = () => vModal(L("تنظیمات گروهی BPB", "BPB bulk settings"), vField("bpb-bulk-ids", L("آیدی‌ها با کاما (خالی = همه آزاد/خطا)", "IDs comma-separated (empty = all free/error)"), "", 'dir="ltr"') + vField("bpb-bulk-ips", L("Proxy IPها", "Proxy IPs"), "", 'dir="ltr"') + vSelect("bpb-bulk-mode", L("حالت Proxy IP", "Proxy IP mode"), [["", L("بدون تغییر", "No change")], ["proxyip", "proxyip"], ["direct", "direct"], ["none", "none"]], ""), "bpbBulkSave");
-ACTIONS.bpbBulkSave = async () => {
-  let ids = vList(vVal("bpb-bulk-ids"));
-  if (!ids.length) ids = (SV.cache.bpb || []).filter((r) => ["free", "error"].includes(r.status)).map((r) => r.id);
-  const settings = {};
-  if (vVal("bpb-bulk-ips")) settings.proxyIPs = vList(vVal("bpb-bulk-ips"));
-  if (vVal("bpb-bulk-mode")) settings.proxyIpMode = vVal("bpb-bulk-mode");
-  const r = await bpbAPI("/accounts/bulk-settings", { method: "POST", body: { ids, settings } });
-  closeModal();
-  const ok = r.results.filter((x) => x.ok).length, fail = r.results.length - ok;
-  toast(`${ok} ✓${fail ? ` · ${fail} ✗` : ""}`, fail ? "error" : "success");
-  SV.html = {}; svRefresh();
-};
