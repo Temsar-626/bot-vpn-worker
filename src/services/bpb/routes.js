@@ -11,6 +11,9 @@ import {
   updateBpbAccount,
   deleteBpbAccount,
   setBpbToken,
+  getBpbDefaults,
+  saveBpbDefaults,
+  getBpbPanelPassword,
   bpbCounts,
 } from "./store.js";
 import {
@@ -54,7 +57,7 @@ admin.get("/accounts/:id", async (c) => {
 
 admin.post("/accounts/:id/install", async (c) => {
   const out = await installBpbOnAccount(c.env, c.req.param("id"));
-  return result(c, { account: publicBpbAccount(out.account), panelUrl: out.panelUrl, subBase: out.subBase });
+  return result(c, { account: publicBpbAccount(out.account), panelUrl: out.panelUrl, subBase: out.subBase, panelPassSeeded: out.panelPassSeeded });
 });
 
 admin.post("/accounts/:id/revoke", async (c) => {
@@ -74,6 +77,28 @@ admin.get("/accounts/:id/token", async (c) => {
   const row = await getBpbAccount(c.env, c.req.param("id"));
   assert(row, "bpb_account_not_found", 404);
   return result(c, { token: await getBpbToken(c.env, row) });
+});
+
+// First-open BPB panel password (username = CF account email).
+admin.get("/accounts/:id/panel-password", async (c) => {
+  const row = await getBpbAccount(c.env, c.req.param("id"));
+  assert(row, "bpb_account_not_found", 404);
+  assert(row.panel_pass_enc, "bpb_panel_pass_missing", 404);
+  return result(c, {
+    password: await getBpbPanelPassword(c.env, row),
+    seeded: !!row.panel_pass_seeded,
+    username: row.cf_email || "",
+  });
+});
+
+// Install-time defaults applied to every new deployment.
+admin.get("/defaults", async (c) => {
+  return result(c, { settings: await getBpbDefaults(c.env) });
+});
+
+admin.put("/defaults", async (c) => {
+  const b = await body(c);
+  return result(c, { settings: await saveBpbDefaults(c.env, b.settings || b) });
 });
 
 admin.put("/accounts/:id/settings", async (c) => {

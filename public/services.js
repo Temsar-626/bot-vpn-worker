@@ -1171,7 +1171,7 @@ ACTIONS.svRequestEdit = (d) => {
         ["reject", L("رد درخواست", "Reject")],
       ],
       "reject",
-    )}${vArea("sr-answer", L("پاسخ مدیر", "Administrator response"))}${r.kind === "refund" ? vField("sr-amount", L("مبلغ استرداد تومان؛ حداکثر مبلغ پرداخت‌شده", "Refund amount; up to amount paid"), r.amount || 0, 'type="number" min="0"') + vCheck("sr-manual", L("برای انبار دستی: غیرفعال‌سازی واقعی کانفیگ را خارج از پنل انجام داده‌ام.", "For manual stock: I have deactivated the actual configuration externally.")) : ""}${r.kind === "move" ? vSelect("sr-panel", L("پنل مقصد", "Destination provider"), [["", L("انتخاب مقصد", "Choose destination")], ...(SV.cache.panels || []).filter((p) => p.type !== "stock").map((p) => [p.id, p.title])], r.targetPanelId || "") : ""}${r.kind === "transfer" ? vNote(L("گیرنده: ", "Recipient: ") + esc(r.targetUserId) + L("؛ لینک قدیمی تغییر می‌کند و مالکیت پنل منتقل می‌شود.", "; the link is rotated and portal ownership is transferred."), true) : ""}`,
+    )}${vArea("sr-answer", L("پاسخ مدیر", "Administrator response"))}${r.kind === "refund" ? (r.suggestedAmount ? vNote(L("مبلغ پیشنهادی pro-rata (روزهای باقی‌مانده): ", "Suggested pro-rata refund (remaining days): ") + vMoney(r.suggestedAmount)) : "") + vField("sr-amount", L("مبلغ استرداد تومان؛ حداکثر مبلغ پرداخت‌شده", "Refund amount; up to amount paid"), r.amount || r.suggestedAmount || 0, 'type="number" min="0"') + vCheck("sr-manual", L("برای انبار دستی: غیرفعال‌سازی واقعی کانفیگ را خارج از پنل انجام داده‌ام.", "For manual stock: I have deactivated the actual configuration externally.")) : ""}${r.kind === "move" ? vSelect("sr-panel", L("پنل مقصد", "Destination provider"), [["", L("انتخاب مقصد", "Choose destination")], ...(SV.cache.panels || []).filter((p) => p.type !== "stock").map((p) => [p.id, p.title])], r.targetPanelId || "") : ""}${r.kind === "transfer" ? vNote(L("گیرنده: ", "Recipient: ") + esc(r.targetUserId) + L("؛ لینک قدیمی تغییر می‌کند و مالکیت پنل منتقل می‌شود.", "; the link is rotated and portal ownership is transferred."), true) : ""}`,
     "svRequestSave",
   );
 };
@@ -1890,12 +1890,19 @@ const bpbStatus = (s) => ({
 })[s] || s;
 const bpbBadge = (v) => `<span class="v-badge ${["free"].includes(v) ? "good" : ["sold", "pending_install"].includes(v) ? "warn" : ["error"].includes(v) ? "bad" : ""}">${bpbStatus(v)}</span>`;
 async function svBpb() {
-  const d = await bpbAPI("/accounts");
+  const [d, def] = await Promise.all([bpbAPI("/accounts"), bpbAPI("/defaults")]);
   SV.cache.bpb = d.rows;
+  SV.cache.bpbDefaults = def.settings || {};
   const c = d.counts || {};
+  const s = def.settings || {};
+  const defaultsCard = vSection(
+    L("تنظیمات پیش‌فرض نصب", "Default install settings"),
+    `<div class="grid sm:grid-cols-2 gap-4">${vField("bpb-def-ips", L("Proxy IP / Clean IP (با کاما)", "Proxy IPs (comma-separated)"), (s.proxyIPs || []).join(", "), 'dir="ltr"')}${vSelect("bpb-def-mode", L("حالت Proxy IP", "Proxy IP mode"), [["proxyip", "proxyip"], ["direct", "direct"], ["none", "none"]], s.proxyIpMode || "proxyip")}${vField("bpb-def-fallback", L("Fallback (اختیاری)", "Fallback (optional)"), s.fallback || "", 'dir="ltr"')}${vField("bpb-def-doh", L("DoH URL (اختیاری)", "DoH URL (optional)"), s.dohUrl || "", 'dir="ltr"')}</div><p class="v-meta mt-2">${L("این تنظیمات موقع نصب روی ورکر اعمال می‌شود؛ تنظیمات هر اکانت بر آن غلبه می‌کند.", "Applied at install time; per-account settings override them.")}</p>`,
+    svBtn(t("save"), "bpbDefaultsSave", "", true),
+  );
   const head = `<div class="v-grid v-stagger">${[["free", c.free || 0, L("اسلات آزاد", "Free slots")], ["sold", c.sold || 0, L("فروخته‌شده", "Sold")], ["error", c.error || 0, L("خطا", "Errors")]].map(([k, n, l]) => `<div class="${CLS.card} p-5"><strong class="block text-2xl">${fmtNum(n)}</strong><span class="v-meta">${l}</span></div>`).join("")}</div>`;
-  const rows = d.rows.length ? d.rows.map((r) => `<div class="v-row"><span class="v-icon">${vIcon("cloud")}</span><div class="v-row-main"><p class="text-sm font-bold">${esc(r.label)} ${bpbBadge(r.status)}</p><p class="v-meta">${esc(r.cf_email || "")} · ${esc(r.worker_name || "")}${r.panel_url ? `<br><span class="v-code" dir="ltr">${esc(r.panel_url)}</span>` : ""}${r.status === "sold" && r.expire_at ? `<br>${L("انقضا", "Expires")}: ${fmtDate(r.expire_at * 1000)}` : ""}${r.last_error ? `<br><span class="text-rose-400">${esc(r.last_error)}</span>` : ""}</p></div><div class="v-actions">${["pending_install", "error"].includes(r.status) ? svBtn(L("نصب", "Install"), "bpbInstall", `data-id="${r.id}"`) : ""}${r.status === "sold" ? svBtn(L("قطع دسترسی", "Revoke"), "bpbRevoke", `data-id="${r.id}"`) : ""}${r.status !== "sold" ? svBtn(L("حذف", "Delete"), "bpbDelete", `data-id="${r.id}"`) : ""}${r.panel_url ? svBtn(L("تنظیمات", "Settings"), "bpbSettings", `data-id="${r.id}"`) : ""}${svBtn(L("توکن", "Token"), "bpbToken", `data-id="${r.id}"`)}</div></div>`).join("") : vEmpty(L("اولین اکانت Cloudflare را با API Token اضافه کنید. هر اکانت = یک Worker.", "Add your first Cloudflare account with an API token. One account = one Worker."), "cloud");
-  return svRows(head + vSection(L("اکانت‌های Cloudflare / اسلات‌های BPB", "Cloudflare accounts / BPB slots"), rows, svBtn(L("اکانت جدید", "New account"), "bpbNew", "", true) + svBtn(L("تنظیمات گروهی", "Bulk settings"), "bpbBulk")) + vNote(L("توکن CF با VAULT_KEY رمز می‌شود و هرگز برنمی‌گردد. برای فروش، یک پنل از نوع BPB بسازید و پلن را به آن وصل کنید؛ خرید، اسلات آزاد را می‌گیرد.", "CF tokens are sealed with VAULT_KEY and never returned. To sell, create a BPB-type provider and attach plans to it; purchases consume a free slot."), true));
+  const rows = d.rows.length ? d.rows.map((r) => `<div class="v-row"><span class="v-icon">${vIcon("cloud")}</span><div class="v-row-main"><p class="text-sm font-bold">${esc(r.label)} ${bpbBadge(r.status)}</p><p class="v-meta">${esc(r.cf_email || "")} · ${esc(r.worker_name || "")}${r.panel_url ? `<br><span class="v-code" dir="ltr">${esc(r.panel_url)}</span>` : ""}${r.status === "sold" && r.expire_at ? `<br>${L("انقضا", "Expires")}: ${fmtDate(r.expire_at * 1000)}` : ""}${r.last_error ? `<br><span class="text-rose-400">${esc(r.last_error)}</span>` : ""}</p></div><div class="v-actions">${["pending_install", "error"].includes(r.status) ? svBtn(L("نصب", "Install"), "bpbInstall", `data-id="${r.id}"`) : ""}${r.status === "sold" ? svBtn(L("قطع دسترسی", "Revoke"), "bpbRevoke", `data-id="${r.id}"`) : ""}${r.status !== "sold" ? svBtn(L("حذف", "Delete"), "bpbDelete", `data-id="${r.id}"`) : ""}${r.panel_url ? svBtn(L("تنظیمات", "Settings"), "bpbSettings", `data-id="${r.id}"`) : ""}${r.hasPanelPass ? svBtn(L("پسورد پنل", "Panel password"), "bpbPanelPass", `data-id="${r.id}"`) : ""}${svBtn(L("توکن", "Token"), "bpbToken", `data-id="${r.id}"`)}</div></div>`).join("") : vEmpty(L("اولین اکانت Cloudflare را با API Token اضافه کنید. هر اکانت = یک Worker.", "Add your first Cloudflare account with an API token. One account = one Worker."), "cloud");
+  return svRows(head + defaultsCard + vSection(L("اکانت‌های Cloudflare / اسلات‌های BPB", "Cloudflare accounts / BPB slots"), rows, svBtn(L("اکانت جدید", "New account"), "bpbNew", "", true) + svBtn(L("تنظیمات گروهی", "Bulk settings"), "bpbBulk")) + vNote(L("برای فروش، یک پنل از نوع BPB بسازید و پلن را به آن وصل کنید؛ خرید، اسلات آزاد را می‌گیرد.", "To sell, create a BPB-type provider and attach plans to it; purchases consume a free slot."), true));
 }
 ACTIONS.bpbNew = () => vModal(L("اکانت Cloudflare جدید", "New Cloudflare account"), vField("bpb-label", L("نام نمایشی", "Label"), "", 'required maxlength="100"') + vField("bpb-token", L("API Token کلادفلر", "Cloudflare API token"), "", 'type="password" required dir="ltr" autocomplete="new-password"') + vNote(L("دسترسی پیشنهادی: Edit Workers + خواندن Account Settings + KV. توکن فقط رمزنگاری‌شده ذخیره می‌شود.", "Suggested scope: edit Workers, read account settings, KV. The token is stored sealed only.")), "bpbSave");
 ACTIONS.bpbSave = async () => {
@@ -1904,7 +1911,14 @@ ACTIONS.bpbSave = async () => {
 };
 ACTIONS.bpbInstall = async (d, el) => {
   el.disabled = true;
-  try { const r = await bpbAPI("/accounts/" + d.id + "/install", { method: "POST" }); toast(r.account.panel_url || t("saved"), "success"); SV.html = {}; await svRefresh(); }
+  try {
+    const r = await bpbAPI("/accounts/" + d.id + "/install", { method: "POST" });
+    toast(r.account.panel_url || t("saved"), "success");
+    SV.html = {};
+    await svRefresh();
+    // Show the first-open panel password right after install.
+    if (r.account.hasPanelPass) await ACTIONS.bpbPanelPass({ id: d.id });
+  }
   catch (e) { toast(vError(e.message), "error"); } finally { el.disabled = false; }
 };
 ACTIONS.bpbRevoke = async (d, el) => {
@@ -1926,6 +1940,16 @@ ACTIONS.bpbToken = async (d) => {
 ACTIONS.bpbCopyToken = async (d) => {
   try { await navigator.clipboard.writeText(d.token); toast(t("copied"), "success"); }
   catch { toast(t("errorGeneric"), "error"); }
+};
+ACTIONS.bpbDefaultsSave = async () => {
+  await bpbAPI("/defaults", { method: "PUT", body: { settings: { proxyIPs: vList(vVal("bpb-def-ips")), proxyIpMode: vVal("bpb-def-mode"), fallback: vVal("bpb-def-fallback"), dohUrl: vVal("bpb-def-doh") } } });
+  toast(t("saved"), "success"); SV.html = {}; svRefresh();
+};
+ACTIONS.bpbPanelPass = async (d) => {
+  const r = await bpbAPI("/accounts/" + d.id + "/panel-password");
+  openModal(
+    `<div class="p-6"><h3 class="font-bold mb-4">${L("پسورد پنل BPB", "BPB panel password")}</h3><p class="v-meta mb-2">${L("یوزرنیم", "Username")}: <span class="v-code" dir="ltr">${esc(r.username)}</span></p><textarea readonly dir="ltr" rows="2" class="${CLS.input}">${esc(r.password)}</textarea><p class="v-meta mt-2">${r.seeded ? L("این پسورد موقع نصب داخل پنل ست شده؛ اولین بازدید مستقیم وارد لاگین می‌شوید.", "Pre-seeded at install; first open goes straight to login.") : L("ست خودکار ناموفق بود؛ این پسورد را در اولین بازدید پنل وارد کنید.", "Auto-seed failed; enter this password on first panel open.")}</p><div class="mt-4 flex gap-2">${svBtn(t("copy"), "bpbCopyToken", `data-token="${esc(r.password)}"`)}${svBtn(t("close"), "modalClose")}</div></div>`,
+  );
 };
 ACTIONS.bpbSettings = (d) => {
   const r = (SV.cache.bpb || []).find((x) => x.id === d.id) || { settings: {} };

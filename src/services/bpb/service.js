@@ -26,8 +26,19 @@ import {
   listBpbAccounts,
   getBpbToken,
   updateBpbAccount,
+  getBpbDefaults,
+  setBpbPanelPassword,
   bpbCounts,
 } from "./store.js";
+
+const PANEL_PASS_CHARSET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
+
+export function randPanelPassword(length = 16) {
+  const arr = crypto.getRandomValues(new Uint8Array(length));
+  let out = "";
+  for (let i = 0; i < length; i++) out += PANEL_PASS_CHARSET[arr[i] % PANEL_PASS_CHARSET.length];
+  return out;
+}
 
 export async function installBpbOnAccount(env, accountId, deps = {}) {
   const fetchFn = deps.fetchFn || globalThis.fetch;
@@ -66,8 +77,10 @@ export async function installBpbOnAccount(env, accountId, deps = {}) {
       row.workers_dev_subdomain || (await ensureWorkersDevSubdomain(token, cfAccountId, randSubdomain, fetchFn));
     const subdomain = subdomainFull.replace(/\.workers\.dev$/, "");
 
-    // 6) Download + build script (Wizard parity).
+    // 6) Download + build script (Wizard parity). Install defaults apply
+    // first, per-account settings override them.
     const workerJs = deps.workerJs || (await downloadWorkerJs(fetchFn));
+    const defaults = await getBpbDefaults(env);
     const built = buildBpbScript({
       workerJs,
       accountId: cfAccountId,
@@ -75,12 +88,23 @@ export async function installBpbOnAccount(env, accountId, deps = {}) {
       apiToken: token,
       workerName,
       subdomain: subdomainFull,
-      overrides: { ...(row.settings || {}), securePath: row.secure_path || undefined },
+      overrides: { ...defaults, ...(row.settings || {}), securePath: row.secure_path || undefined },
     });
 
     // 7) Deploy + enable subdomain.
     await deployWorker(token, cfAccountId, workerName, built.script, kvNamespaceId, fetchFn);
     await enableWorkerSubdomain(token, cfAccountId, workerName, fetchFn);
+
+    // 8) First-open panel password: BPB gates the panel behind KV key "pwd"
+    // with username = account email. Pre-seed it so first open goes straight
+    // to login; on failure the admin sets it manually on first open.
+    const panelPassword = randPanelPassword();
+    let seeded = false;
+    try {
+      await kvWrite(token, cfAccountId, kvNamespaceId, "pwd", panelPassword, fetchFn);
+      seeded = true;
+    } catch {}
+    await setBpbPanelPassword(env, row.id, panelPassword, seeded);
 
     const updated = await updateBpbAccount(env, row.id, {
       cf_account_id: cfAccountId,
@@ -98,7 +122,7 @@ export async function installBpbOnAccount(env, accountId, deps = {}) {
     });
     // Store rotation secrets only as presence flag — real secrets live inside
     // the deployed worker + CF account, never in our DB in plaintext.
-    return { account: updated, panelUrl: built.panelUrl, subBase: built.subBase };
+    return { account: updated, panelUrl: built.panelUrl, subBase: built.subBase, panelPassSeeded: seeded };
   } catch (e) {
     await updateBpbAccount(env, row.id, {
       status: "error",
@@ -128,6 +152,7 @@ export async function assignBpbSlot(env, { userId, orderId, serviceId = "", dura
     sold_order_id: String(orderId || ""),
     sold_service_id: String(serviceId || ""),
     sold_user_id: String(userId),
+    sold_at: Date.now(),
     expire_at: expireAt,
   });
   return {
@@ -186,6 +211,25 @@ export async function revokeBpbSlot(env, accountId, deps = {}) {
   });
   void subdomain;
   return { account: freed, panelUrl: built.panelUrl, subBase: built.subBase };
+}
+
+/** Find the sold slot backing a service (by predicted service id). */
+export async function findBpbSlotForService(env, serviceId) {
+  const rows = await listBpbAccounts(env);
+  return rows.find((s) => s.sold_service_id === String(serviceId) && s.status === "sold") || null;
+}
+
+/**
+ * Pro-rata refund quote: remaining full days over total days times paid total.
+ * Pure math — pass resolved inputs, easy to test.
+ */
+export function proRataRefund({ paidTotal = 0, totalDays = 0, expireAt = 0, nowSec = epoch() }) {
+  const total = Math.max(0, Number(totalDays) || 0);
+  const remaining = Math.max(0, Math.ceil((Number(expireAt) - nowSec) / 86400));
+  const paid = Math.max(0, Math.floor(Number(paidTotal) || 0));
+  if (!total || !remaining || !paid) return { remainingDays: remaining, totalDays: total, amount: 0 };
+  const capped = Math.min(remaining, total);
+  return { remainingDays: remaining, totalDays: total, amount: Math.floor((paid * capped) / total) };
 }
 
 /** Single + bulk settings update (redeploy with merged settings). */

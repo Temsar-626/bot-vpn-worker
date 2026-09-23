@@ -20,6 +20,7 @@ import {
   ownedService,
   serviceContent,
   simpleServiceAction,
+  bpbRefundQuote,
 } from "./engine.js";
 import { createPayment, attachReceipt, paymentView } from "./payments.js";
 import {
@@ -57,6 +58,10 @@ export function serviceError(code, lang = "fa") {
     stock_empty: [
       "موجودی کانفیگ این پلن تمام شده است.",
       "This plan is out of stock.",
+    ],
+    bpb_no_free_slot: [
+      "ظرفیت BPB این پلن تمام شده است؛ لطفاً بعداً تلاش کنید.",
+      "BPB capacity for this plan is sold out. Try again later.",
     ],
     trial_limit_reached: [
       "سهمیه تست شما تمام شده است.",
@@ -289,7 +294,7 @@ async function showPlans(env, user, lang, page = 0) {
   const slice = plans.slice(page * 8, page * 8 + 8);
   const rows = slice.map((p) => [
     btn(
-      `${p.title.slice(0, 32)} · ${amount(p.price, lang)}`,
+      `${p.title.slice(0, 32)} · ${amount(p.price, lang)}${p.stockLeft !== undefined ? ` · ${tr("موجودی", "Stock", lang)}: ${p.stockLeft}` : ""}`,
       `vpn:plan:${p.id}`,
     ),
   ]);
@@ -333,6 +338,8 @@ async function showServices(env, user, lang, page = 0) {
 }
 async function showService(env, user, lang, serviceId) {
   const s = await ownedService(env, user.id, serviceId);
+  const panel = s.panelId ? await get(env, "panel", s.panelId) : null;
+  const isBpb = panel?.type === "bpb" && !["deleted", "refunded", "cancelled"].includes(s.status);
   return say(
     env,
     user,
@@ -348,6 +355,16 @@ async function showService(env, user, lang, serviceId) {
         btn(tr("🔄 تمدید", "🔄 Renew", lang), "vpn:renew:" + s.id),
         btn(tr("🌐 مدیریت کامل", "🌐 Manage", lang), "vpn:portal"),
       ],
+      ...(isBpb
+        ? [
+            [
+              btn(
+                tr("❌ لغو و بازگشت وجه", "❌ Cancel & refund", lang),
+                "vpn:cancel:" + s.id,
+              ),
+            ],
+          ]
+        : []),
       [btn(tr("📋 فهرست سرویس‌ها", "📋 My services", lang), "vpn:mine:0")],
     ],
   );
@@ -463,6 +480,21 @@ export async function serviceCallback(env, user, lang, data) {
         planId: s.planId,
       }),
     );
+  } else if (act === "cancel") {
+    const s = await ownedService(env, user.id, value);
+    const q = await bpbRefundQuote(env, s);
+    await say(
+      env,
+      user,
+      `❌ ${tr("لغو سرویس و بازگشت وجه به کیف پول؟", "Cancel the service and refund to wallet?", lang)}\n${s.title}\n${tr("روزهای باقی‌مانده", "Remaining days", lang)}: ${q.remainingDays} / ${q.totalDays}\n${tr("مبلغ بازگشتی", "Refund amount", lang)}: ${amount(q.amount, lang)}\n${tr("پس از لغو، لینک اشتراک از کار می‌افتد.", "The subscription link stops working after cancellation.", lang)}`,
+      [
+        [btn(tr("✅ بله، لغو کن", "✅ Yes, cancel it", lang), "vpn:cancel_yes:" + s.id)],
+        [btn(tr("⬅️ بازگشت", "⬅️ Back", lang), "vpn:service:" + s.id)],
+      ],
+    );
+  } else if (act === "cancel_yes") {
+    await simpleServiceAction(env, user.id, value, "cancel_refund");
+    await showService(env, user, lang, value);
   } else if (act === "portal") await openPortal(env, user, lang);
   else if (act === "wallet") {
     const a = await account(env, user.id),

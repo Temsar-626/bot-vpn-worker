@@ -27,6 +27,8 @@ export async function createBpbAccount(env, { label, apiToken }) {
     kv_namespace_id: "",
     secure_path: "",
     panel_url: "",
+    panel_pass_enc: null,
+    panel_pass_seeded: false,
     vl_uuid: "",
     tr_pass: "",
     status: "pending_install",
@@ -34,6 +36,7 @@ export async function createBpbAccount(env, { label, apiToken }) {
     sold_order_id: "",
     sold_service_id: "",
     sold_user_id: "",
+    sold_at: 0,
     expire_at: 0,
     settings: {},
     created_at: now,
@@ -53,15 +56,51 @@ export async function getBpbToken(env, row) {
   return secret.token;
 }
 
+export async function setBpbPanelPassword(env, accountId, password, seeded) {
+  const row = await getBpbAccount(env, accountId);
+  assert(row, "bpb_account_not_found", 404);
+  row.panel_pass_enc = await seal(env, { password: String(password) });
+  if (seeded !== undefined) row.panel_pass_seeded = !!seeded;
+  row.updated_at = Date.now();
+  await put(env, TYPE, row.id, row);
+  return row;
+}
+
+export async function getBpbPanelPassword(env, row) {
+  const secret = await unseal(env, row.panel_pass_enc);
+  assert(secret?.password, "bpb_panel_pass_missing", 503);
+  return secret.password;
+}
+
+// Install-time defaults (proxy IPs, DoH, fallback...). Applied to every new
+// deployment unless the account overrides them.
+export async function getBpbDefaults(env) {
+  const { sanitizeBpbSettings } = await import("./script.js");
+  const row = await get(env, "bpb-defaults", "main", { settings: {} });
+  try {
+    return sanitizeBpbSettings(row.settings || {});
+  } catch {
+    return {};
+  }
+}
+
+export async function saveBpbDefaults(env, settings) {
+  const { sanitizeBpbSettings } = await import("./script.js");
+  const clean = sanitizeBpbSettings(settings || {});
+  await put(env, "bpb-defaults", "main", { settings: clean, updated_at: Date.now() });
+  return clean;
+}
+
 export function publicBpbAccount(row) {
   if (!row) return null;
-  const { api_token_enc, tr_pass, vl_uuid, ...rest } = row;
+  const { api_token_enc, tr_pass, vl_uuid, panel_pass_enc, ...rest } = row;
   return {
     ...rest,
     hasToken: !!api_token_enc,
     tokenMask: "****",
     // Never expose secrets; UI shows only that rotation happened.
     hasSecrets: !!(tr_pass || vl_uuid),
+    hasPanelPass: !!panel_pass_enc,
   };
 }
 

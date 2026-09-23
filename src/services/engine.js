@@ -23,7 +23,7 @@ import {
 } from "./common.js";
 import { serviceSettings } from "./settings.js";
 import { PROVIDERS, connector, prepareAccount } from "./providers.js";
-import { assignBpbSlot } from "./bpb/service.js";
+import { assignBpbSlot, findBpbSlotForService, proRataRefund } from "./bpb/service.js";
 import {
   getBpbAccount,
   listBpbAccounts,
@@ -208,6 +208,7 @@ async function effectivePanel(env, panelId) {
 export async function catalogue(env, userId) {
   const a = await account(env, userId),
     plans = [];
+  let bpbFree = null;
   for (const p of await list(env, "plan")) {
     if (!p.enabled || !p.roles.includes(a.role)) continue;
     let panel;
@@ -215,6 +216,17 @@ export async function catalogue(env, userId) {
       panel = await effectivePanel(env, p.panelId);
     } catch {
       continue;
+    }
+    let stockLeft;
+    if (panel.type === "bpb") {
+      // Live inventory: hide BPB plans with no free slot instead of failing at pay time.
+      if (bpbFree === null) {
+        bpbFree = (await listBpbAccounts(env)).filter(
+          (r) => r.status === "free" && r.panel_url && r.worker_name,
+        ).length;
+      }
+      if (bpbFree <= 0) continue;
+      stockLeft = bpbFree;
     }
     const { options, prices, ...publicPlan } = p;
     plans.push({
@@ -228,6 +240,7 @@ export async function catalogue(env, userId) {
       effectivePanelId: panel.id,
       provider: panel.type,
       capabilities: PROVIDERS[panel.type].capabilities,
+      ...(stockLeft === undefined ? {} : { stockLeft }),
     });
   }
   return plans;
@@ -559,6 +572,7 @@ async function releaseOperation(env, o, reason) {
           sold_order_id: "",
           sold_service_id: "",
           sold_user_id: "",
+          sold_at: 0,
           expire_at: 0,
           updated_at: Date.now(),
         };
@@ -1058,6 +1072,22 @@ async function ownsRemote(env, panel, a, r) {
   return String(r.raw?.note || "").includes(a.operationId);
 }
 
+async function deliverText(env, service) {
+  const panel = service.panelId ? await get(env, "panel", service.panelId) : null;
+  if (panel?.type === "bpb") {
+    const link = service.subscriptionUrl || (service.configs || [])[0] || "";
+    const exp = service.expiresAt
+      ? new Date(service.expiresAt * 1000).toISOString().slice(0, 10)
+      : "—";
+    const gb = service.dataLimit ? (service.dataLimit / GB).toFixed(0) + " GB" : "∞";
+    return (
+      `✅ سرویس BPB شما آماده است!\n${service.title}\n\n🔗 لینک اشتراک:\n${link}\n\n` +
+      `📦 حجم: ${gb} · 📅 انقضا: ${exp}\nسقف مصرف منصفانه طبق توضیحات پلن است.\n\n` +
+      `✅ Your BPB service is ready!\nSubscription:\n${link}\n\nQuota: ${gb} · Expires: ${exp}`
+    );
+  }
+  return `✅ سرویس شما آماده است / Service ready\n${service.title}\n${service.username}\n\nبرای مشاهده کانفیگ، QR و مدیریت سرویس از دکمه زیر استفاده کنید.`;
+}
 export async function deliverService(env, service) {
   if (service.deliveryState === "sent") return service;
   const token = await resolveToken(env);
@@ -1088,7 +1118,7 @@ export async function deliverService(env, service) {
   }
   service.deliveryState = "sending";
   await put(env, "service", service.id, service);
-  const text = `✅ سرویس شما آماده است / Service ready\n${service.title}\n${service.username}\n\nبرای مشاهده کانفیگ، QR و مدیریت سرویس از دکمه زیر استفاده کنید.`;
+  const text = await deliverText(env, service);
   const response = await sendToUser(token, service.userId, text, {
     reply_markup: {
       inline_keyboard: [
@@ -1209,6 +1239,10 @@ export async function simpleServiceAction(
     return s;
   }
   if (action === "sync") return synchronize(env, s.id);
+  if (action === "cancel_refund") {
+    assert(panel.type === "bpb", "panel_action_unsupported");
+    return cancelBpbService(env, userId, serviceId);
+  }
   if (
     action === "report" ||
     action === "refund" ||
@@ -1238,6 +1272,12 @@ export async function simpleServiceAction(
       status: "pending",
       createdAt: Date.now(),
     };
+    if (action === "refund" && panel.type === "bpb") {
+      // Pre-compute the pro-rata suggestion so the admin sees it in review.
+      try {
+        r.suggestedAmount = (await bpbRefundQuote(env, s)).amount;
+      } catch {}
+    }
     await put(env, "request", r.id, r);
     return r;
   }
@@ -1281,15 +1321,17 @@ async function decideBpbRefund(env, r, s, b) {
     await put(env, "request", r.id, r);
     return r;
   }
-  r.amount = integer(b.amount, 0, s.paidTotal || 0);
+  const fallback = r.suggestedAmount ?? 0;
+  r.amount = integer(b.amount ?? fallback, 0, s.paidTotal || 0);
   r.status = "processing";
   s.actionLock = r.id;
   await commitJson(env, [
     [key("service", s.id), s],
     [key("request", r.id), r],
   ]);
-  // Free the linked slot without CF rotation (admin rotates via BPB API if needed).
-  const slot = (await listBpbAccounts(env)).find((x) => x.sold_service_id === s.id && x.status === "sold");
+  // Hand the slot to the expiry path: expire now, bpbTick rotates secrets and
+  // frees it within about a minute, so the old link dies even on refund.
+  const slot = await findBpbSlotForService(env, s.id);
   s.status = "refunded";
   s.refundedAt = Date.now();
   delete s.actionLock;
@@ -1307,11 +1349,57 @@ async function decideBpbRefund(env, r, s, b) {
   if (slot) {
     writes.push([
       key("bpb-account", slot.id),
-      { ...slot, status: "free", sold_order_id: "", sold_service_id: "", sold_user_id: "", expire_at: 0, updated_at: Date.now() },
+      { ...slot, expire_at: epoch(), updated_at: Date.now() },
     ]);
   }
   await commitJson(env, writes);
   return r;
+}
+
+/** Resolve pro-rata inputs for a BPB service (plan days with sane fallbacks). */
+export async function bpbRefundQuote(env, s) {
+  const slot = await findBpbSlotForService(env, s.id);
+  assert(slot, "remote_service_missing", 404);
+  const plan = s.planId ? await get(env, "plan", s.planId) : null;
+  const span = Math.max(0, slot.expire_at - (slot.sold_at ? Math.floor(slot.sold_at / 1000) : slot.expire_at));
+  const totalDays = plan?.days || Math.max(1, Math.ceil(span / 86400)) || 30;
+  return {
+    slot,
+    ...proRataRefund({ paidTotal: s.paidTotal || 0, totalDays, expireAt: slot.expire_at }),
+  };
+}
+
+/**
+ * User self-cancel for BPB: instant pro-rata wallet credit, service closed,
+ * slot handed to the expiry path (link rotates via tick). No admin needed.
+ */
+export async function cancelBpbService(env, userId, serviceId) {
+  const s = await ownedService(env, userId, serviceId);
+  const panel = await get(env, "panel", s.panelId);
+  assert(panel?.type === "bpb", "panel_action_unsupported");
+  assert(!s.actionLock, "service_operation_pending");
+  assert(!["deleted", "refunded", "cancelled"].includes(s.status), "service_unavailable");
+  assert(
+    !(await list(env, "operation")).some(
+      (o) => o.serviceId === s.id && ["queued", "sending", "review"].includes(o.status),
+    ),
+    "service_operation_pending",
+  );
+  const q = await bpbRefundQuote(env, s);
+  const change = await walletWrites(env, s.payerId || s.userId, {
+    delta: q.amount,
+    eventId: "self-cancel:" + s.id,
+    reason: "service_refund",
+  });
+  s.status = "refunded";
+  s.refundedAt = Date.now();
+  const writes = [
+    ...change.writes,
+    [key("service", s.id), s],
+    [key("bpb-account", q.slot.id), { ...q.slot, expire_at: epoch(), updated_at: Date.now() }],
+  ];
+  await commitJson(env, writes);
+  return s;
 }
 export async function decideServiceRequest(env, requestId, b) {
   const r = await get(env, "request", requestId);

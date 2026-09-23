@@ -205,3 +205,77 @@ test("bpb services expose only the direct link (no proxyUrl)", async () => {
   const v2 = await serviceContent(e2, 42, "svc2");
   assert(v2.proxyUrl.includes("/sub/"));
 });
+
+test("install defaults merge and panel password is pre-seeded in KV", async () => {
+  const { fetchFn } = cfMock();
+  const { saveBpbDefaults, getBpbDefaults, getBpbPanelPassword } = await import("../src/services/bpb/store.js");
+  await saveBpbDefaults(env, { proxyIPs: ["9.9.9.9"], proxyIpMode: "direct" });
+  assert.deepEqual((await getBpbDefaults(env)).proxyIPs, ["9.9.9.9"]);
+  const row = await createBpbAccount(env, { label: "shop-1", apiToken: "CF_TOKEN_ABCDEF123456" });
+  const out = await installBpbOnAccount(env, row.id, { fetchFn, workerJs: WORKER_JS });
+  assert.equal(out.panelPassSeeded, true);
+  const pass = await getBpbPanelPassword(env, await (await import("../src/services/bpb/store.js")).getBpbAccount(env, row.id));
+  assert.match(pass, /^[A-Za-z2-9]{16}$/);
+  const { default: routes } = await import("../src/services/bpb/routes.js");
+  void routes;
+});
+
+test("pro-rata refund math is exact on boundaries", async () => {
+  const { proRataRefund } = await import("../src/services/bpb/service.js");
+  const now = 1_700_000_000;
+  // 150k toman, 30 days, 15 days left -> 75k.
+  assert.deepEqual(proRataRefund({ paidTotal: 150000, totalDays: 30, expireAt: now + 15 * 86400, nowSec: now }), { remainingDays: 15, totalDays: 30, amount: 75000 });
+  // Expired -> 0, full remaining capped at total.
+  assert.equal(proRataRefund({ paidTotal: 150000, totalDays: 30, expireAt: now - 1, nowSec: now }).amount, 0);
+  assert.equal(proRataRefund({ paidTotal: 100, totalDays: 30, expireAt: now + 60 * 86400, nowSec: now }).amount, 100);
+  assert.equal(proRataRefund({ paidTotal: 0, totalDays: 30, expireAt: now + 5 * 86400, nowSec: now }).amount, 0);
+});
+
+test("self-cancel credits wallet pro-rata and hands slot to expiry path", async () => {
+  const { savePanel } = await import("../src/services/providers.js");
+  const { savePlan, cancelBpbService, catalogue } = await import("../src/services/engine.js");
+  const { put } = await import("../src/services/common.js");
+  const { adjustWallet } = await import("../src/services/wallet.js");
+  const pool = await savePanel(env, { title: "BPB pool", type: "bpb" });
+  const plan = await savePlan(env, { title: "BPB 150GB", panelId: pool.id, days: 30, volumeGB: 150, price: 150000 });
+  const row = await createBpbAccount(env, { label: "shop-1", apiToken: "CF_TOKEN_ABCDEF123456" });
+  const { fetchFn } = cfMock();
+  await installBpbOnAccount(env, row.id, { fetchFn, workerJs: WORKER_JS });
+  const assigned = await assignBpbSlot(env, { userId: "42", orderId: "op-cancel", serviceId: "op-cancel_0", durationDays: 30 });
+  await put(env, "service", "op-cancel_0", {
+    id: "op-cancel_0", userId: "42", panelId: pool.id, planId: plan.id,
+    title: plan.title, username: "bpb_x", status: "active",
+    configs: [assigned.subUrl], subscriptionUrl: assigned.subUrl,
+    dataLimit: 150 * 1073741824, usedBytes: 0, expiresAt: assigned.expireAt,
+    remoteAccount: { bpbAccountId: assigned.account.id }, ownerToken: "c".repeat(64),
+    paidTotal: 150000, createdAt: Date.now(),
+  });
+  // Catalogue shows live stock while a slot is free... none free now (sold).
+  assert((await catalogue(env, 99)).every((p) => p.provider !== "bpb"));
+  const out = await cancelBpbService(env, 42, "op-cancel_0");
+  assert.equal(out.status, "refunded");
+  const { account } = await import("../src/services/wallet.js");
+  const acc = await account(env, 42);
+  assert(acc.balance > 0 && acc.balance <= 150000);
+  const slots = await listBpbAccounts(env);
+  assert(slots[0].expire_at <= Math.floor(Date.now() / 1000) + 1);
+  assert.equal(slots[0].status, "sold");
+  // Tick rotates and frees it.
+  const { bpbTick: tick } = await import("../src/services/bpb/service.js");
+  const t = await tick(env, { fetchFn, workerJs: WORKER_JS });
+  assert.deepEqual(t.revoked, [slots[0].id]);
+});
+
+test("catalogue exposes live stock for bpb plans", async () => {
+  const { savePanel } = await import("../src/services/providers.js");
+  const { savePlan, catalogue } = await import("../src/services/engine.js");
+  const pool = await savePanel(env, { title: "BPB pool 2", type: "bpb" });
+  await savePlan(env, { title: "BPB monthly", panelId: pool.id, days: 30, volumeGB: 150, price: 100000 });
+  assert((await catalogue(env, 55)).every((p) => p.provider !== "bpb"));
+  const row = await createBpbAccount(env, { label: "s", apiToken: "CF_TOKEN_ZZZZZZZZZZZZ" });
+  const { fetchFn } = cfMock();
+  await installBpbOnAccount(env, row.id, { fetchFn, workerJs: WORKER_JS });
+  const plans = (await catalogue(env, 55)).filter((p) => p.provider === "bpb");
+  assert.equal(plans.length, 1);
+  assert.equal(plans[0].stockLeft, 1);
+});
