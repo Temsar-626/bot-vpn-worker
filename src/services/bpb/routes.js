@@ -79,6 +79,19 @@ admin.get("/accounts/:id/token", async (c) => {
   return result(c, { token: await getBpbToken(c.env, row) });
 });
 
+// Live panel settings (the worker's own API via stored email+password).
+// Safe on sold slots: runtime keys never rotate identity secrets.
+admin.get("/accounts/:id/panel-settings", async (c) => {
+  const { readBpbPanelSettings } = await import("./panel.js");
+  return result(c, await readBpbPanelSettings(c.env, c.req.param("id")));
+});
+
+admin.put("/accounts/:id/panel-settings", async (c) => {
+  const b = await body(c);
+  const { writeBpbPanelSettings } = await import("./panel.js");
+  return result(c, await writeBpbPanelSettings(c.env, c.req.param("id"), b.settings || b));
+});
+
 // First-open BPB panel password (username = CF account email).
 admin.get("/accounts/:id/panel-password", async (c) => {
   const row = await getBpbAccount(c.env, c.req.param("id"));

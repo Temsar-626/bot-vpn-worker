@@ -48,7 +48,7 @@ test("bpb is a top-level studio tab gated by the services module", async () => {
 
 test("bpb workspace renders toolbar, stats and empty state", async () => {
   panel = bootPanel();
-  await (run(`(async () => { document.body.innerHTML = await studioBpb(); return true; })()`), result());
+  await (run(`(async () => { document.body.insertAdjacentHTML('beforeend', await studioBpb()); return true; })()`), result());
   await (run(`new Promise((r) => setTimeout(r, 50))`), result());
   const doc = panel.doc;
   await (run(`bpbEnsure(true).then(() => bpbRender())`), result());
@@ -59,7 +59,7 @@ test("bpb workspace renders toolbar, stats and empty state", async () => {
 
 test("bpb list filters, paginates and bulk-selects at scale", async () => {
   panel = bootPanel();
-  await (run(`(async () => { document.body.innerHTML = await studioBpb(); return true; })()`), result());
+  await (run(`(async () => { document.body.insertAdjacentHTML('beforeend', await studioBpb()); return true; })()`), result());
   await (
     run(`(async () => {
       BPB.rows = ${JSON.stringify(fakeRows(120)).replace(/</g, "\\u003c")};
@@ -88,4 +88,20 @@ test("bpb list filters, paginates and bulk-selects at scale", async () => {
     run(`(async () => { await ACTIONS.bpbSelectAll(); return BPB.selected.size; })()`),
     result()
   ).then((n) => assert.equal(n, 12, "select-all captures filtered rows"));
+});
+
+test("panel settings editor opens grouped form with raw JSON mode", async () => {
+  panel = bootPanel();
+  await (run(`(async () => { document.body.insertAdjacentHTML('beforeend', await studioBpb()); return true; })()`), result());
+  const groups = await (
+    run(`(async () => {
+      BPB.rows = [];
+      await ACTIONS.bpbPanelSettings({ id: "x" });
+      return document.querySelectorAll("#modal-box details").length;
+    })()`),
+    result()
+  );
+  assert.equal(groups, 12, "twelve setting groups render");
+  const raw = await (run(`(async () => { await ACTIONS.bpbPanelRawToggle(); return !!document.querySelector("#bps-raw"); })()`), result());
+  assert.equal(raw, true, "raw JSON mode toggles");
 });

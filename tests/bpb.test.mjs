@@ -380,3 +380,64 @@ test("re-entering the token recovers a lost-key account", async () => {
   await store.setBpbToken(plainEnv, row.id, "CF_TOKEN_NEW_1234567890");
   assert.equal(await store.getBpbToken(plainEnv, await store.getBpbAccount(plainEnv, row.id)), "CF_TOKEN_NEW_1234567890");
 });
+
+test("bpb panel session client logs in and reads/writes settings", async () => {
+  const mod = await import("../src/services/bpb/panel.js");
+  const store = await import("../src/services/bpb/store.js");
+  const calls = [];
+  const fetchFn = async (url, opts = {}) => {
+    calls.push({ url: String(url), method: opts.method || "GET" });
+    const u = String(url);
+    if (u.endsWith("/login/authenticate")) {
+      const body = JSON.parse(opts.body);
+      assert.equal(body.username, "admin@example.com");
+      assert.equal(body.password, "PanelPass123");
+      return new Response(JSON.stringify({ success: true }), {
+        headers: { "set-cookie": "jwtToken=jwt-abc; Path=/; HttpOnly" },
+      });
+    }
+    if (u.endsWith("/panel/settings"))
+      return Response.json({ proxySettings: { remoteDNS: "8.8.8.8", blockAds: true } });
+    if (u.endsWith("/panel/update-settings")) {
+      const body = JSON.parse(opts.body);
+      assert.equal(body.blockAds, false);
+      assert.equal(opts.headers.cookie, "jwtToken=jwt-abc");
+      return Response.json({ success: true });
+    }
+    throw new Error("unexpected " + u);
+  };
+  const row = await createBpbAccount(env, { label: "panel", apiToken: "CF_TOKEN_ABCDEF123456" });
+  await store.updateBpbAccount(env, row.id, {
+    status: "sold", cf_email: "Admin@Example.com", worker_name: "w1",
+    workers_dev_subdomain: "sub.workers.dev", secure_path: "SECURE123456",
+    kv_namespace_id: "kv-1", sold_service_id: "svc-1",
+  });
+  await store.setBpbPanelPassword(env, row.id, "PanelPass123", true);
+  const read = await mod.readBpbPanelSettings(env, row.id, { fetchFn });
+  assert.deepEqual(read.settings, { remoteDNS: "8.8.8.8", blockAds: true });
+  // Works on sold slots too.
+  assert.equal(read.status, "sold");
+  const written = await mod.writeBpbPanelSettings(env, row.id, { blockAds: false }, { fetchFn });
+  assert.deepEqual(written.settings, { remoteDNS: "8.8.8.8", blockAds: true });
+  assert.deepEqual(written.stripped, []);
+  assert(calls.some((c) => c.url.includes("/login/authenticate")));
+});
+
+test("panel patch sanitizer strips identity keys and rejects unknown", async () => {
+  const { sanitizePanelPatch, PANEL_SETTINGS_KEYS } = await import("../src/services/bpb/panel.js");
+  assert(PANEL_SETTINGS_KEYS.length >= 70);
+  const { patch, stripped } = sanitizePanelPatch({ blockAds: true, securePath: "x", vlUUID: "y" });
+  assert.deepEqual(patch, { blockAds: true });
+  assert.deepEqual(stripped.sort(), ["securePath", "vlUUID"]);
+  assert.throws(() => sanitizePanelPatch({ noSuchKey: 1 }), /bpb_unknown_keys/);
+  assert.throws(() => sanitizePanelPatch({}), /bpb_patch_empty/);
+});
+
+test("panel login failure surfaces auth error", async () => {
+  const mod = await import("../src/services/bpb/panel.js");
+  const bad = async () => new Response("no", { status: 401 });
+  await assert.rejects(
+    mod.bpbPanelLogin("https://w.sub", "SEC", "a@b.c", "wrong", bad),
+    /bpb_panel_auth_failed/,
+  );
+});

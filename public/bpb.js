@@ -112,8 +112,8 @@ async function bpbRender(forceBody = false) {
       bpbBtn(t("save"), "bpbDefaultsSave", "", true),
     );
     const sel = BPB.selected.size;
-    const bulkBar = sel
-      ? `<div class="v-row !border-sky-500"><div class="v-row-main"><p class="text-sm font-bold">${fmtNum(sel)} ${L("انتخاب شده", "selected")}</p></div><div class="v-actions">${bpbBtn(L("نصب", "Install"), "bpbBulkInstall")}${bpbBtn(L("قطع دسترسی", "Revoke"), "bpbBulkRevoke")}${bpbBtn(L("تنظیمات", "Settings"), "bpbBulkSettings")}${bpbBtn(L("حذف", "Delete"), "bpbBulkDelete")}${bpbBtn(L("لغو انتخاب", "Clear"), "bpbClearSel")}</div></div>`
+    const     bulkBar = sel
+      ? `<div class="v-row !border-sky-500"><div class="v-row-main"><p class="text-sm font-bold">${fmtNum(sel)} ${L("انتخاب شده", "selected")}</p></div><div class="v-actions">${bpbBtn(L("نصب", "Install"), "bpbBulkInstall")}${bpbBtn(L("قطع دسترسی", "Revoke"), "bpbBulkRevoke")}${bpbBtn(L("تنظیمات دیپلوی", "Deploy settings"), "bpbBulkSettings")}${bpbBtn(L("تنظیمات پنل", "Panel settings"), "bpbBulkPanelSettings")}${bpbBtn(L("حذف", "Delete"), "bpbBulkDelete")}${bpbBtn(L("لغو انتخاب", "Clear"), "bpbClearSel")}</div></div>`
       : "";
     const rows = bpbFiltered();
     const pages = Math.max(1, Math.ceil(rows.length / BPB.perPage));
@@ -127,7 +127,7 @@ async function bpbRender(forceBody = false) {
         ? slice
             .map(
               (r) =>
-                `<div class="v-row"><input type="checkbox" data-bpb-check="${r.id}" ${BPB.selected.has(r.id) ? "checked" : ""} aria-label="${esc(r.label || r.id)}"><span class="v-icon">${vIcon("cloud")}</span><div class="v-row-main"><p class="text-sm font-bold">${esc(r.label)} ${bpbBadge(r.status)}</p><p class="v-meta">${esc(r.cf_email || "")} · ${esc(r.worker_name || "")}${r.panel_url ? `<br><span class="v-code" dir="ltr">${esc(r.panel_url)}</span>` : ""}${r.status === "sold" ? `<br>${L("کاربر", "User")}: ${esc(r.sold_user_id || "")} · ` + bpbExpiry(r) : ""}${r.last_error ? `<br><span class="text-rose-400">${esc(r.last_error)}</span>` : ""}</p></div><div class="v-actions">${["pending_install", "error"].includes(r.status) ? bpbBtn(L("نصب", "Install"), "bpbInstall", `data-id="${r.id}"`) : ""}${r.status === "sold" ? bpbBtn(L("قطع دسترسی", "Revoke"), "bpbRevoke", `data-id="${r.id}"`) : ""}${bpbBtn(L("حذف", "Delete"), "bpbDelete", `data-id="${r.id}"`)}${r.panel_url ? bpbBtn(L("تنظیمات", "Settings"), "bpbSettings", `data-id="${r.id}"`) : ""}${r.hasPanelPass ? bpbBtn(L("پسورد پنل", "Panel password"), "bpbPanelPass", `data-id="${r.id}"`) : ""}${bpbBtn(L("توکن", "Token"), "bpbToken", `data-id="${r.id}"`)}${bpbBtn(L("تعویض توکن", "Replace token"), "bpbTokenReplace", `data-id="${r.id}"`)}</div></div>`,
+                `<div class="v-row"><input type="checkbox" data-bpb-check="${r.id}" ${BPB.selected.has(r.id) ? "checked" : ""} aria-label="${esc(r.label || r.id)}"><span class="v-icon">${vIcon("cloud")}</span><div class="v-row-main"><p class="text-sm font-bold">${esc(r.label)} ${bpbBadge(r.status)}</p><p class="v-meta">${esc(r.cf_email || "")} · ${esc(r.worker_name || "")}${r.panel_url ? `<br><span class="v-code" dir="ltr">${esc(r.panel_url)}</span>` : ""}${r.status === "sold" ? `<br>${L("کاربر", "User")}: ${esc(r.sold_user_id || "")} · ` + bpbExpiry(r) : ""}${r.last_error ? `<br><span class="text-rose-400">${esc(r.last_error)}</span>` : ""}</p></div><div class="v-actions">${["pending_install", "error"].includes(r.status) ? bpbBtn(L("نصب", "Install"), "bpbInstall", `data-id="${r.id}"`) : ""}${r.status === "sold" ? bpbBtn(L("قطع دسترسی", "Revoke"), "bpbRevoke", `data-id="${r.id}"`) : ""}${bpbBtn(L("حذف", "Delete"), "bpbDelete", `data-id="${r.id}"`)}${r.panel_url ? bpbBtn(L("تنظیمات دیپلوی", "Deploy settings"), "bpbSettings", `data-id="${r.id}"`) : ""}${r.panel_url ? bpbBtn(L("تنظیمات پنل", "Panel settings"), "bpbPanelSettings", `data-id="${r.id}"`, true) : ""}${r.hasPanelPass ? bpbBtn(L("پسورد پنل", "Panel password"), "bpbPanelPass", `data-id="${r.id}"`) : ""}${bpbBtn(L("توکن", "Token"), "bpbToken", `data-id="${r.id}"`)}${bpbBtn(L("تعویض توکن", "Replace token"), "bpbTokenReplace", `data-id="${r.id}"`)}</div></div>`,
             )
             .join("")
         : vEmpty(L("موردی با این فیلتر نیست.", "Nothing matches this filter."), "cloud"));
@@ -140,7 +140,7 @@ async function bpbRender(forceBody = false) {
       ? vNote(L(`${expiring} اسلات تا ۳ روز آینده منقضی می‌شود.`, `${expiring} slot(s) expire within 3 days.`), true)
       : "";
     host.innerHTML =
-      `<div class="v-grid v-stagger">${cards}</div><div class="mt-4">${expNote}${defaultsCard}</div><div class="mt-4">${vSection(L("اکانت‌ها", "Accounts"), toolbar + bulkBar + list + pager, bpbBtn(L("تنظیمات گروهی", "Bulk settings"), "bpbBulkSettingsTop"))}</div><div class="mt-4">${vNote(L("برای فروش، یک پنل از نوع BPB بسازید و پلن را به آن وصل کنید؛ خرید، اسلات آزاد را می‌گیرد. توکن‌ها plaintext ذخیره می‌شوند — دسترسی ادمین را محدود نگه دارید.", "To sell, create a BPB-type provider and attach plans to it; purchases consume a free slot. Tokens are stored in plaintext — keep admin access restricted."), true)}</div>`;
+      `<div class="v-grid v-stagger">${cards}</div><div class="mt-4">${expNote}${defaultsCard}</div><div class="mt-4">${vSection(L("اکانت‌ها", "Accounts"), toolbar + bulkBar + list + pager, bpbBtn(L("تنظیمات دیپلوی گروهی", "Bulk deploy settings"), "bpbBulkSettingsTop"))}</div><div class="mt-4">${vNote(L("برای فروش، یک پنل از نوع BPB بسازید و پلن را به آن وصل کنید؛ خرید، اسلات آزاد را می‌گیرد. توکن‌ها plaintext ذخیره می‌شوند — دسترسی ادمین را محدود نگه دارید.", "To sell, create a BPB-type provider and attach plans to it; purchases consume a free slot. Tokens are stored in plaintext — keep admin access restricted."), true)}</div>`;
     refreshIcons();
     paintDropdowns(host);
     if (typeof updateSaveBar === "function") updateSaveBar();
@@ -319,7 +319,7 @@ ACTIONS.bpbSettings = (d) => {
   const s = r.settings || {};
   BPB.editId = d.id;
   vModal(
-    L("تنظیمات BPB", "BPB settings"),
+    L("تنظیمات دیپلوی", "Deploy settings"),
     vField("bpb-proxyips", L("Proxy IP / Clean IP (با کاما)", "Proxy IPs (comma-separated)"), (s.proxyIPs || []).join(", "), 'dir="ltr"') +
       vSelect("bpb-proxymode", L("حالت Proxy IP", "Proxy IP mode"), [["proxyip", "proxyip"], ["direct", "direct"], ["none", "none"]], s.proxyIpMode || "proxyip") +
       vField("bpb-fallback", L("Fallback (اختیاری)", "Fallback (optional)"), s.fallback || "", 'dir="ltr"') +
@@ -491,4 +491,200 @@ ACTIONS.bpbExport = () => {
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   toast(`${fmtNum(rows.length)} ✓`, "success");
+};
+
+/* ---------- live panel settings editor (all 75 runtime keys) ---------- */
+const BPB_PANEL_GROUPS = [
+  ["دی‌ان‌اس", "DNS", ["remoteDNS", "remoteDnsHost", "localDNS", "antiSanctionDNS", "enableIPv6", "fakeDNS"]],
+  ["عبور تحریمی", "Sanction bypass", ["bypassIran", "bypassChina", "bypassRussia"]],
+  ["عبور سرویس‌ها", "Service routing", ["bypassOpenAi", "bypassGoogleAi", "bypassMicrosoft", "bypassOracle", "bypassDocker", "bypassAdobe", "bypassEpicGames", "bypassIntel", "bypassAmd", "bypassNvidia", "bypassAsus", "bypassHp", "bypassLenovo"]],
+  ["مسدودسازی", "Blocking", ["blockAds", "blockPorn", "blockUDP443", "blockMalware", "blockPhishing", "blockCryptominers"]],
+  ["قوانین سفارشی", "Custom rules", ["customBypassRules", "customBlockRules", "customBypassSanctionRules"]],
+  ["فرگمنت", "Fragment", ["fragmentMode", "fragmentLengthMin", "fragmentLengthMax", "fragmentDelayMin", "fragmentDelayMax", "fragmentMaxSplitMin", "fragmentMaxSplitMax", "fragmentPackets"]],
+  ["اتصال", "Connection", ["protocols", "ports", "fingerprint", "enableTFO", "enableECH", "echServerName", "bestPingInterval", "allowLANConnection", "logLevel", "customDomain"]],
+  ["پروکسی زنجیره‌ای", "Proxy chain", ["upstreamProxy", "upstreamParams", "chainProxy", "chainProxyParams"]],
+  ["CDN و IP تمیز", "CDN & clean IPs", ["cleanIPs", "customCdnAddrs", "customCdnHost", "customCdnSni"]],
+  ["وارپ", "Warp", ["warpEndpoints", "warpBestPingInterval", "warpReservedBytes", "warpRemoteDNS"]],
+  ["نویز", "Noise", ["xrayUdpNoises", "knockerNoiseMode", "knockerNoiseCountMin", "knockerNoiseCountMax", "knockerNoiseSizeMin", "knockerNoiseSizeMax", "knockerNoiseDelayMin", "knockerNoiseDelayMax", "amneziaNoiseCount", "amneziaNoiseSizeMin", "amneziaNoiseSizeMax"]],
+  ["ساب", "Subscription", ["customSubs", "remoteSettings", "customConfigs"]],
+];
+const BPB_KEY_FA = {
+  remoteDNS: "دی‌ان‌اس راه دور", remoteDnsHost: "هاست دی‌ان‌اس", localDNS: "دی‌ان‌اس محلی",
+  antiSanctionDNS: "دی‌ان‌اس ضدتحریم", enableIPv6: "فعال‌سازی IPv6", fakeDNS: "دی‌ان‌اس جعلی",
+  logLevel: "سطح لاگ", allowLANConnection: "اتصال LAN", customDomain: "دامین سفارشی",
+  upstreamProxy: "آپ‌استریم پروکسی", upstreamParams: "پارامتر آپ‌استریم", chainProxy: "چین پروکسی",
+  chainProxyParams: "پارامتر چین", cleanIPs: "IPهای تمیز", customCdnAddrs: "آدرس‌های CDN",
+  customCdnHost: "هاست CDN", customCdnSni: "SNI سفارشی", bestPingInterval: "فاصله بهترین پینگ",
+  protocols: "پروتکل‌ها", ports: "پورت‌ها", fingerprint: "فینگرپرینت", enableTFO: "TFO",
+  fragmentMode: "حالت فرگمنت", fragmentLengthMin: "حداقل طول", fragmentLengthMax: "حداکثر طول",
+  fragmentDelayMin: "حداقل تأخیر", fragmentDelayMax: "حداکثر تأخیر", fragmentMaxSplitMin: "حداقل اسپلیت",
+  fragmentMaxSplitMax: "حداکثر اسپلیت", fragmentPackets: "پکت‌های فرگمنت",
+  enableECH: "ECH", echServerName: "نام سرور ECH",
+  bypassIran: "عبور ایران", bypassChina: "عبور چین", bypassRussia: "عبور روسیه",
+  bypassOpenAi: "عبور OpenAI", bypassGoogleAi: "عبور Google AI", bypassMicrosoft: "عبور مایکروسافت",
+  bypassOracle: "عبور اوراکل", bypassDocker: "عبور داکر", bypassAdobe: "عبور ادوبی",
+  bypassEpicGames: "عبور اپیک", bypassIntel: "عبور اینتل", bypassAmd: "عبور AMD",
+  bypassNvidia: "عبور انویدیا", bypassAsus: "عبور ایسوس", bypassHp: "عبور HP", bypassLenovo: "عبور لنوو",
+  blockAds: "مسدودیت تبلیغات", blockPorn: "مسدودیت غیراخلاقی", blockUDP443: "مسدودیت UDP/443",
+  blockMalware: "مسدودیت بدافزار", blockPhishing: "مسدودیت فیشینگ", blockCryptominers: "مسدودیت ماینر",
+  customBypassRules: "قوانین عبور سفارشی", customBlockRules: "قوانین انسداد سفارشی",
+  customBypassSanctionRules: "قوانین تحریم سفارشی",
+  warpRemoteDNS: "دی‌ان‌اس وارپ", warpEndpoints: "اندپوینت‌های وارپ",
+  warpBestPingInterval: "فاصله پینگ وارپ", warpReservedBytes: "بایت رزرو وارپ",
+  xrayUdpNoises: "نویز UDP", knockerNoiseMode: "حالت نویز ناکر",
+  knockerNoiseCountMin: "حداقل تعداد نویز", knockerNoiseCountMax: "حداکثر تعداد نویز",
+  knockerNoiseSizeMin: "حداقل اندازه نویز", knockerNoiseSizeMax: "حداکثر اندازه نویز",
+  knockerNoiseDelayMin: "حداقل تأخیر نویز", knockerNoiseDelayMax: "حداکثر تأخیر نویز",
+  amneziaNoiseCount: "تعداد نویز آمنزیا", amneziaNoiseSizeMin: "حداقل اندازه نویز آمنزیا",
+  amneziaNoiseSizeMax: "حداکثر اندازه نویز آمنزیا",
+  customSubs: "ساب‌های سفارشی", remoteSettings: "تنظیمات راه دور", customConfigs: "کانفیگ سفارشی",
+};
+const BPB_TEXTAREA_KEYS = new Set([
+  "customBypassRules", "customBlockRules", "customBypassSanctionRules",
+  "customSubs", "remoteSettings", "customConfigs",
+]);
+const bpbKeyLabel = (k) => BPB_KEY_FA[k] || k;
+
+function bpbPanelField(key, val) {
+  const id = "bps-" + key;
+  const label = bpbKeyLabel(key);
+  if (typeof val === "boolean") return vCheck(id, label, val);
+  if (typeof val === "number") return vField(id, label, val, 'type="number" dir="ltr"');
+  if (Array.isArray(val)) {
+    if (BPB_TEXTAREA_KEYS.has(key)) return vArea(id, label, val.join("\n"), 4, 'dir="ltr"');
+    return vField(id, label, val.join(", "), 'dir="ltr"');
+  }
+  if (typeof val === "string") {
+    if (BPB_TEXTAREA_KEYS.has(key) || val.length > 80 || val.includes("\n"))
+      return vArea(id, label, val, 3, 'dir="ltr"');
+    return vField(id, label, val, 'dir="ltr"');
+  }
+  return vField(id, label, val == null ? "" : JSON.stringify(val), 'dir="ltr"');
+}
+
+function bpbPanelForm() {
+  const ed = BPB.panelEdit;
+  if (ed.raw)
+    return vArea("bps-raw", "JSON", JSON.stringify(ed.settings, null, 2), 22, 'dir="ltr" spellcheck="false"');
+  return BPB_PANEL_GROUPS.map(
+    ([fa, en, keys]) =>
+      `<details class="v-media-details"><summary>${esc(S.lang === "en" ? en : fa)} (${keys.length})</summary><div class="pt-4 grid sm:grid-cols-2 gap-4">${keys
+        .filter((k) => k in ed.settings)
+        .map((k) => bpbPanelField(k, ed.settings[k]))
+        .join("")}</div></details>`,
+  ).join("");
+}
+
+function bpbPanelModal() {
+  const ed = BPB.panelEdit;
+  const row = (BPB.rows || []).find((x) => x.id === ed.id);
+  openModal(
+    `<div class="p-6"><h3 class="font-bold mb-2">${L("تنظیمات پنل", "Panel settings")} · ${esc(row?.label || "")}</h3>` +
+      (row?.status === "sold"
+        ? vNote(L("اسلات فروخته‌شده — این تنظیمات لینک خریدار را نمی‌کشد.", "Sold slot — these settings keep the buyer link alive."), true)
+        : "") +
+      `<div class="v-actions my-3">${bpbBtn(ed.raw ? L("فرم", "Form") : L("JSON خام", "Raw JSON"), "bpbPanelRawToggle")}</div><div id="bps-form">${bpbPanelForm()}</div><div class="mt-4 flex gap-2">${bpbBtn(t("save"), "bpbPanelSettingsSave", "", true)}${bpbBtn(t("close"), "modalClose")}</div></div>`,
+  );
+  refreshIcons();
+}
+
+function bpbCollectPanelForm(orig) {
+  const out = {};
+  for (const [, , keys] of BPB_PANEL_GROUPS) {
+    for (const k of keys) {
+      if (!(k in orig)) continue;
+      const v = orig[k];
+      if (typeof v === "boolean") out[k] = vOn("bps-" + k);
+      else if (typeof v === "number") out[k] = Number(vVal("bps-" + k));
+      else if (Array.isArray(v)) {
+        const text = vVal("bps-" + k);
+        out[k] = BPB_TEXTAREA_KEYS.has(k)
+          ? text.split(/\r?\n/).map((x) => x.trim()).filter(Boolean)
+          : text.split(/[,\n]+/).map((x) => x.trim()).filter(Boolean);
+      } else if (v !== null && typeof v === "object") {
+        const text = vVal("bps-" + k).trim();
+        try {
+          out[k] = text ? JSON.parse(text) : v;
+        } catch {
+          out[k] = text;
+        }
+      } else out[k] = vVal("bps-" + k);
+    }
+  }
+  return out;
+}
+
+ACTIONS.bpbPanelSettings = async (d, el) => {
+  if (el) el.disabled = true;
+  try {
+    const r = await bpbAPI("/accounts/" + d.id + "/panel-settings");
+    BPB.panelEdit = { id: d.id, settings: r.settings || {}, raw: false };
+    bpbPanelModal();
+  } catch (e) {
+    toast(vError(e.message), "error");
+  } finally {
+    if (el) el.disabled = false;
+  }
+};
+ACTIONS.bpbPanelRawToggle = () => {
+  if (!BPB.panelEdit) return;
+  // Persist what is on screen before switching representation.
+  try {
+    BPB.panelEdit.settings = BPB.panelEdit.raw
+      ? JSON.parse(vVal("bps-raw"))
+      : bpbCollectPanelForm(BPB.panelEdit.settings);
+  } catch {
+    toast(L("JSON معتبر نیست.", "Invalid JSON."), "error");
+    return;
+  }
+  BPB.panelEdit.raw = !BPB.panelEdit.raw;
+  bpbPanelModal();
+};
+ACTIONS.bpbPanelSettingsSave = async () => {
+  const ed = BPB.panelEdit;
+  if (!ed) return;
+  let patch;
+  if (ed.raw) {
+    try {
+      patch = JSON.parse(vVal("bps-raw"));
+    } catch {
+      toast(L("JSON معتبر نیست.", "Invalid JSON."), "error");
+      return;
+    }
+  } else patch = bpbCollectPanelForm(ed.settings);
+  try {
+    const r = await bpbAPI("/accounts/" + ed.id + "/panel-settings", { method: "PUT", body: { settings: patch } });
+    closeModal();
+    toast((r.stripped?.length ? L("ذخیره شد (کلیدهای هویتی نادیده گرفته شد).", "Saved (identity keys ignored).") : t("saved")), "success");
+    BPB.rows = null;
+    await bpbRender();
+  } catch (e) {
+    toast(vError(e.message), "error");
+  }
+};
+ACTIONS.bpbBulkPanelSettings = () => {
+  if (!BPB.selected.size) {
+    toast(L("اول چند اکانت را با چک‌باکس انتخاب کنید.", "Select accounts with checkboxes first."), "warn");
+    return;
+  }
+  vModal(
+    L("تنظیمات پنل گروهی (JSON)", "Bulk panel settings (JSON)"),
+    `<p class="v-meta mb-4">${fmtNum(BPB.selected.size)} ${L("اکانت انتخاب شده", "accounts selected")}</p>` +
+      vArea("bps-bulk-raw", "JSON patch", '{\n  "blockAds": true\n}', 10, 'dir="ltr" spellcheck="false"') +
+      vNote(L("فقط کلیدهای معتبر runtime اعمال می‌شود؛ کلیدهای هویتی (securePath و...) نادیده گرفته می‌شوند. روی اسلات فروخته‌شده هم امن است.", "Only valid runtime keys apply; identity keys are ignored. Safe on sold slots.")),
+    "bpbBulkPanelSettingsSave",
+  );
+};
+ACTIONS.bpbBulkPanelSettingsSave = async () => {
+  let patch;
+  try {
+    patch = JSON.parse(vVal("bps-bulk-raw"));
+  } catch {
+    toast(L("JSON معتبر نیست.", "Invalid JSON."), "error");
+    return;
+  }
+  closeModal();
+  await bpbBulkRun(L("تنظیمات پنل گروهی", "Bulk panel settings"), bpbBulkIds(), (id) =>
+    bpbAPI("/accounts/" + id + "/panel-settings", { method: "PUT", body: { settings: patch } }),
+  );
 };
