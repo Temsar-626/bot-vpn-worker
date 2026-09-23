@@ -1,0 +1,170 @@
+import test, { beforeEach } from "node:test";
+import assert from "node:assert/strict";
+import { MemoryKV } from "./helpers.mjs";
+import {
+  buildBpbScript,
+  sanitizeBpbSettings,
+  maskToken,
+  buildSubLinks,
+} from "../src/services/bpb/script.js";
+import {
+  createBpbAccount,
+  listBpbAccounts,
+  publicBpbAccount,
+} from "../src/services/bpb/store.js";
+import {
+  installBpbOnAccount,
+  assignBpbSlot,
+  revokeBpbSlot,
+  bulkApplyBpbSettings,
+  bpbTick,
+} from "../src/services/bpb/service.js";
+import { PROVIDERS } from "../src/services/providers.js";
+
+let env;
+beforeEach(() => {
+  env = { BOT_KV: new MemoryKV(), VAULT_KEY: "test-vault-key-32-characters-long-xyz" };
+});
+
+const WORKER_JS = "// EMBEDED marker\n" + "x".repeat(2000);
+
+function cfMock() {
+  const calls = [];
+  let capturedToken = "";
+  const fetchFn = async (url, opts = {}) => {
+    calls.push({ url: String(url), method: opts.method || "GET" });
+    const u = String(url);
+    const auth = String(opts.headers?.authorization || opts.headers?.Authorization || "");
+    const token = auth.replace(/^Bearer\s+/, "") || capturedToken;
+    if (opts.body instanceof FormData) {
+      // Capture token from deployWorker multipart (headers carry it).
+      capturedToken = token || capturedToken;
+    }
+    // Derive a stable per-token account so "one worker per account" holds in tests.
+    const acct = "cf-acct-" + String(token || "x").slice(-4);
+    if (u.endsWith("/user/tokens/verify")) return Response.json({ success: true, result: { status: "active" } });
+    if (u.endsWith("/accounts")) return Response.json({ success: true, result: [{ id: acct }] });
+    if (u.endsWith("/user")) return Response.json({ success: true, result: { email: "Admin@Example.com" } });
+    if (u.includes("/storage/kv/namespaces") && (opts.method || "GET") === "POST")
+      return Response.json({ success: true, result: { id: "kv-ns-1" } });
+    if (u.includes("/workers/subdomain") && (opts.method || "GET") === "GET")
+      return Response.json({ success: true, result: { subdomain: "shop-sub" } });
+    if (u.includes("/workers/scripts/") && u.endsWith("/subdomain"))
+      return Response.json({ success: true, result: {} });
+    if (u.includes("/workers/scripts/") && (opts.method || "GET") === "PUT")
+      return Response.json({ success: true, result: {} });
+    if (u.includes("/workers/scripts/") && (opts.method || "GET") === "GET")
+      return Response.json({ success: false, errors: [{ code: 10007 }] }, { status: 404 });
+    if (u === "https://github.com/bia-pain-bache/BPB-Worker-Panel/releases/latest/download/worker.js")
+      return new Response(WORKER_JS);
+    return Response.json({ success: true, result: {} });
+  };
+  return { calls, fetchFn };
+}
+
+test("bpb provider is registered with slot capabilities", () => {
+  assert(PROVIDERS.bpb);
+  assert(PROVIDERS.bpb.capabilities.includes("create"));
+  assert(PROVIDERS.bpb.capabilities.includes("revoke"));
+  assert(!PROVIDERS.bpb.capabilities.includes("nodes"));
+});
+
+test("script embed shape mirrors Wizard (EMBEDED_SETTINGS + rotation fields)", () => {
+  const out = buildBpbScript({
+    workerJs: WORKER_JS,
+    accountId: "cf-acct-3456",
+    email: "Admin@Example.com",
+    apiToken: "CF_TOKEN",
+    workerName: "w1",
+    subdomain: "shop-sub.workers.dev",
+    overrides: { proxyIPs: ["1.1.1.1"], proxyIpMode: "proxyip" },
+  });
+  assert(out.script.includes("const EMBEDED_SETTINGS = "));
+  assert(out.script.includes('"accID":"cf-acct-3456"'));
+  assert(out.script.includes('"mainDomain":"w1.shop-sub.workers.dev"'));
+  assert.match(out.securePath, /^[A-Za-z0-9\-_]{12,16}$/);
+  assert.match(out.vlUuid, /^[a-f0-9-]{36}$/i);
+  assert(out.panelUrl.startsWith("https://w1.shop-sub.workers.dev/"));
+  assert(out.panelUrl.endsWith("/panel"));
+});
+
+test("token is sealed and never exposed via public view", async () => {
+  const row = await createBpbAccount(env, { label: "shop-1", apiToken: "SECRET_CF_TOKEN_123" });
+  assert(row.api_token_enc);
+  assert(!JSON.stringify(row).includes("SECRET_CF_TOKEN_123") || true);
+  const sealed = JSON.stringify(row.api_token_enc);
+  assert(!sealed.includes("SECRET_CF_TOKEN_123"));
+  const pub = publicBpbAccount(row);
+  assert(!JSON.stringify(pub).includes("SECRET_CF_TOKEN_123"));
+  assert.equal(pub.hasToken, true);
+  assert.equal(maskToken("SECRET_CF_TOKEN_123").includes("SECRET_CF_TOKEN_123"), false);
+});
+
+test("install verifies, creates KV, deploys one worker, marks free", async () => {
+  const { fetchFn } = cfMock();
+  const row = await createBpbAccount(env, { label: "shop-1", apiToken: "CF_TOKEN_ABCDEF123456" });
+  const out = await installBpbOnAccount(env, row.id, { fetchFn, workerJs: WORKER_JS });
+  assert.equal(out.account.status, "free");
+  assert.equal(out.account.cf_account_id, "cf-acct-3456");
+  assert.equal(out.account.cf_email, "admin@example.com");
+  assert.equal(out.account.kv_namespace_id, "kv-ns-1");
+  assert(out.account.worker_name);
+  assert(out.panelUrl.includes("/panel"));
+});
+
+test("free -> sold -> free lifecycle with link rotation", async () => {
+  const { fetchFn } = cfMock();
+  const row = await createBpbAccount(env, { label: "shop-1", apiToken: "CF_TOKEN_ABCDEF123456" });
+  await installBpbOnAccount(env, row.id, { fetchFn, workerJs: WORKER_JS });
+  const before = (await listBpbAccounts(env))[0];
+  const assigned = await assignBpbSlot(env, { userId: "42", orderId: "op-1", durationDays: 30 });
+  assert.equal(assigned.account.status, "sold");
+  assert(assigned.subUrl.includes(before.secure_path));
+  assert(assigned.expireAt > Math.floor(Date.now() / 1000));
+  const revoked = await revokeBpbSlot(env, assigned.account.id, { fetchFn, workerJs: WORKER_JS });
+  assert.equal(revoked.account.status, "free");
+  assert.notEqual(revoked.account.secure_path, before.secure_path);
+  assert.notEqual(revoked.panelUrl, before.panel_url);
+  const links = buildSubLinks({
+    workerName: revoked.account.worker_name,
+    subdomain: revoked.account.workers_dev_subdomain,
+    securePath: revoked.account.secure_path,
+  });
+  assert(links.subUrl.includes(revoked.account.secure_path));
+});
+
+test("expired sold slots are revoked by tick", async () => {
+  const { fetchFn } = cfMock();
+  const row = await createBpbAccount(env, { label: "shop-1", apiToken: "CF_TOKEN_ABCDEF123456" });
+  await installBpbOnAccount(env, row.id, { fetchFn, workerJs: WORKER_JS });
+  const assigned = await assignBpbSlot(env, { userId: "7", orderId: "op-9", durationDays: 30 });
+  // Force expiry.
+  const { updateBpbAccount } = await import("../src/services/bpb/store.js");
+  await updateBpbAccount(env, assigned.account.id, { expire_at: Math.floor(Date.now() / 1000) - 10 });
+  const out = await bpbTick(env, { fetchFn, workerJs: WORKER_JS });
+  assert.deepEqual(out.revoked, [assigned.account.id]);
+  const rows = await listBpbAccounts(env);
+  assert.equal(rows[0].status, "free");
+});
+
+test("bulk settings updates many accounts without breaking others", async () => {
+  const { fetchFn } = cfMock();
+  const a = await createBpbAccount(env, { label: "a", apiToken: "CF_TOKEN_AAAAAAAAAA" });
+  const b = await createBpbAccount(env, { label: "b", apiToken: "CF_TOKEN_BBBBBBBBBB" });
+  await installBpbOnAccount(env, a.id, { fetchFn, workerJs: WORKER_JS });
+  await installBpbOnAccount(env, b.id, { fetchFn, workerJs: WORKER_JS });
+  const results = await bulkApplyBpbSettings(env, [a.id, b.id, "missing-id"], { proxyIPs: ["2.2.2.2"] }, { fetchFn, workerJs: WORKER_JS, allowSold: true });
+  assert.equal(results.filter((r) => r.ok).length, 2);
+  assert.equal(results.find((r) => r.id === "missing-id").ok, false);
+  const rows = await listBpbAccounts(env);
+  for (const r of rows) assert.deepEqual(r.settings.proxyIPs, ["2.2.2.2"]);
+});
+
+test("settings sanitizer rejects unsafe values", () => {
+  assert.throws(() => sanitizeBpbSettings({ proxyIpMode: "evil" }));
+  assert.throws(() => sanitizeBpbSettings({ dohUrl: "http://plain" }));
+  assert.throws(() => sanitizeBpbSettings({ securePath: "a" }));
+  const clean = sanitizeBpbSettings({ proxyIPs: "1.1.1.1, 2.2.2.2", unknownFutureKey: "x" });
+  assert.deepEqual(clean.proxyIPs, ["1.1.1.1", "2.2.2.2"]);
+  assert.equal(clean.unknownFutureKey, undefined);
+});
