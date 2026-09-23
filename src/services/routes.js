@@ -190,7 +190,7 @@ admin.get("/bootstrap", async (c) => {
     providers: PROVIDERS,
     gateways: GATEWAYS,
     ready: {
-      vault: !!c.env.VAULT_KEY,
+      vault: true,
       backup: !!c.env.BACKUPS && !!c.env.BACKUP_PASSWORD,
     },
     counts: withCounts

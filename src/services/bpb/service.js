@@ -46,7 +46,6 @@ export async function installBpbOnAccount(env, accountId, deps = {}) {
   const row = await getBpbAccount(env, accountId);
   assert(row, "bpb_account_not_found", 404);
   assert(row.status !== "sold", "bpb_slot_sold", 400);
-  assert(env.VAULT_KEY && String(env.VAULT_KEY).length >= 32, "vault_key_required", 503);
   const token = await getBpbToken(env, row);
   try {
     // 1) Verify + account identity.

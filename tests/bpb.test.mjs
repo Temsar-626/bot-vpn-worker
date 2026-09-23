@@ -333,3 +333,25 @@ test("sub links match the official BPB router (no bare /sub)", async () => {
   const fromRow = slotSubLinks({ worker_name: "w1", workers_dev_subdomain: "s.workers.dev", secure_path: "SECURE123" });
   assert.equal(fromRow.subUrl, out.subUrl);
 });
+
+test("without VAULT_KEY secrets persist as plaintext and flows still work", async () => {
+  const plainEnv = { BOT_KV: new MemoryKV() };
+  const { seal, unseal } = await import("../src/services/common.js");
+  const sealed = await seal(plainEnv, { token: "PLAIN_CF_TOKEN" });
+  assert.equal(sealed.version, 0);
+  assert.deepEqual(await unseal(plainEnv, sealed), { token: "PLAIN_CF_TOKEN" });
+  const row = await createBpbAccount(plainEnv, { label: "plain", apiToken: "CF_TOKEN_PLAINTEXT_123" });
+  assert(row.api_token_enc);
+  const { fetchFn } = cfMock();
+  const out = await installBpbOnAccount(plainEnv, row.id, { fetchFn, workerJs: WORKER_JS });
+  assert.equal(out.account.status, "free");
+  const assigned = await assignBpbSlot(plainEnv, { userId: "1", orderId: "op-plain", durationDays: 30 });
+  assert.equal(assigned.account.status, "sold");
+});
+
+test("v1 sealed data still decrypts when VAULT_KEY is configured", async () => {
+  const { seal, unseal } = await import("../src/services/common.js");
+  const sealed = await seal(env, { token: "V1_SECRET" });
+  assert.equal(sealed.version, 1);
+  assert.deepEqual(await unseal(env, sealed), { token: "V1_SECRET" });
+});

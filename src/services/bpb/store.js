@@ -1,5 +1,6 @@
 // BPB accounts store (DO/SQLite via svc-bpb-account entities).
-// api_token is sealed with VAULT_KEY (api_token_enc); raw token never persists.
+// The CF token is sealed when VAULT_KEY is configured, otherwise kept as
+// plaintext (v0 envelope). Raw token never hits logs, API lists, or UI.
 // Status: pending_install | free | sold | error | disabled
 
 import { get, put, list, key, assert, id, str } from "../common.js";
@@ -11,7 +12,6 @@ export const BPB_STATUS = ["pending_install", "free", "sold", "error", "disabled
 const TYPE = "bpb-account";
 
 export async function createBpbAccount(env, { label, apiToken }) {
-  assert(env.VAULT_KEY && String(env.VAULT_KEY).length >= 32, "vault_key_required", 503);
   const cleanLabel = str(label, 100);
   assert(cleanLabel, "bpb_label_required");
   assert(apiToken && String(apiToken).trim().length >= 10, "bpb_token_required");
@@ -119,7 +119,6 @@ export async function updateBpbAccount(env, accountId, patch) {
 }
 
 export async function setBpbToken(env, accountId, apiToken) {
-  assert(env.VAULT_KEY && String(env.VAULT_KEY).length >= 32, "vault_key_required", 503);
   assert(apiToken && String(apiToken).trim().length >= 10, "bpb_token_required");
   const row = await getBpbAccount(env, accountId);
   assert(row, "bpb_account_not_found", 404);

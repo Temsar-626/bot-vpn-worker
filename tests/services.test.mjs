@@ -221,7 +221,7 @@ test("services admin API requires admin authentication and credentials are encry
     "secret-provider-password",
   );
 });
-test("native provider registration rejects unsafe URLs and missing vault key", async () => {
+test("native provider registration rejects unsafe URLs and works without vault key", async () => {
   assert.equal(
     (
       await api("POST", "/panels", {
@@ -234,17 +234,17 @@ test("native provider registration rejects unsafe URLs and missing vault key", a
     400,
   );
   delete h.env.VAULT_KEY;
-  assert.equal(
-    (
-      await api("POST", "/panels", {
-        title: "X",
-        type: "marzban",
-        url: "https://vpn.example.org",
-        secret: { token: "x" },
-      })
-    ).status,
-    503,
-  );
+  const res = await api("POST", "/panels", {
+    title: "Y",
+    type: "marzban",
+    url: "https://vpn.example.org",
+    secret: { token: "x" },
+  });
+  assert.equal(res.status, 200);
+  const stored = await get(h.env, "panel", res.data.panel.id);
+  assert.equal(stored.credentials.version, 0);
+  assert.equal((await unseal(h.env, stored.credentials)).token, "x");
+  h.env.VAULT_KEY = "test-encryption-key-32-characters-long";
 });
 test("Telegram initData verifies HMAC, freshness, and duplicate fields", async () => {
   const valid = await initData();

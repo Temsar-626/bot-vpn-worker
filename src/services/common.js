@@ -154,11 +154,9 @@ export async function limited(env, bucket, max = 20, seconds = 60) {
   await put(env, "rate", bucket, old, { ttl: seconds });
 }
 export async function credentialKey(env) {
-  assert(
-    env.VAULT_KEY && String(env.VAULT_KEY).length >= 32,
-    "vault_key_required",
-    503,
-  );
+  // Encryption is optional: with VAULT_KEY (>=32 chars) secrets are sealed
+  // with AES-GCM (v1); without it they persist as plaintext (v0).
+  if (!env.VAULT_KEY || String(env.VAULT_KEY).length < 32) return null;
   return crypto.subtle.importKey(
     "raw",
     await digest(env.VAULT_KEY),
@@ -168,8 +166,9 @@ export async function credentialKey(env) {
   );
 }
 export async function seal(env, value) {
-  const k = await credentialKey(env),
-    iv = crypto.getRandomValues(new Uint8Array(12));
+  const k = await credentialKey(env);
+  if (!k) return { version: 0, data: JSON.stringify(value) };
+  const iv = crypto.getRandomValues(new Uint8Array(12));
   const ciphertext = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv },
     k,
@@ -180,7 +179,10 @@ export async function seal(env, value) {
 export async function unseal(env, value) {
   if (!value) return {};
   try {
+    if (value.version === 0 && typeof value.data === "string")
+      return JSON.parse(value.data);
     const k = await credentialKey(env);
+    assert(k, "vault_decryption_failed", 503);
     const plain = await crypto.subtle.decrypt(
       { name: "AES-GCM", iv: bytes64(value.iv) },
       k,
