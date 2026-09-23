@@ -105,6 +105,11 @@ export const PROVIDERS = {
     capabilities: ["create", "read", "delete", "toggle", "inbounds"],
     hint: "RouterOS REST با HTTPS؛ حجم/زمان توسط profile سمت سرور",
   },
+  bpb: {
+    label: "BPB (Cloudflare Workers)",
+    capabilities: ["create", "read", "renew", "revoke"],
+    hint: "هر اکانت Cloudflare = یک Worker = یک اسلات فروش (مدیریت در بخش BPB)",
+  },
 };
 export const publicPanel = (panel) => {
   const { credentials, ...p } = panel;
@@ -140,7 +145,10 @@ export async function savePanel(env, body, existing = {}) {
     createdAt: existing.createdAt || Date.now(),
   };
   assert(p.title, "panel_title_required");
-  assert(p.type === "stock" || publicHTTPS(p.url), "panel_https_required");
+  assert(
+    p.type === "stock" || p.type === "bpb" || publicHTTPS(p.url),
+    "panel_https_required",
+  );
   assert(JSON.stringify(p.options).length < 15000, "panel_options_too_large");
   assert(!p.fallbackPanelId || p.fallbackPanelId !== p.id, "fallback_cycle");
   const seen = new Set([p.id]);
@@ -167,7 +175,10 @@ export async function savePanel(env, body, existing = {}) {
     p.credentials = await seal(env, old);
     await env.BOT_KV.delete(key("login", p.id));
   }
-  assert(p.type === "stock" || p.credentials, "panel_credentials_required");
+  assert(
+    p.type === "stock" || p.type === "bpb" || p.credentials,
+    "panel_credentials_required",
+  );
   await put(env, "panel", p.id, p);
   return p;
 }

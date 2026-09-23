@@ -23,6 +23,12 @@ import {
 } from "./common.js";
 import { serviceSettings } from "./settings.js";
 import { PROVIDERS, connector, prepareAccount } from "./providers.js";
+import { assignBpbSlot } from "./bpb/service.js";
+import {
+  getBpbAccount,
+  listBpbAccounts,
+  updateBpbAccount,
+} from "./bpb/store.js";
 import { account, available, walletWrites, drawRaffles } from "./wallet.js";
 
 export const ownedService = async (env, userId, serviceId) => {
@@ -542,6 +548,24 @@ export const operationView = (o) => ({
 });
 async function releaseOperation(env, o, reason) {
   const writes = [];
+  // BPB slots reserved by this operation go back to free (fast, no CF call).
+  try {
+    const slots = await listBpbAccounts(env);
+    for (const slot of slots) {
+      if (slot.sold_order_id === o.id && slot.status === "sold") {
+        const freed = {
+          ...slot,
+          status: "free",
+          sold_order_id: "",
+          sold_service_id: "",
+          sold_user_id: "",
+          expire_at: 0,
+          updated_at: Date.now(),
+        };
+        writes.push([key("bpb-account", slot.id), freed]);
+      }
+    }
+  } catch {}
   for (const stockId of o.stockIds) {
     const s = await get(env, "stock", stockId);
     if (s?.operationId === o.id && s.status === "reserved") {
@@ -685,6 +709,85 @@ async function finalizeOperation(env, o) {
   await commitJson(env, writes);
   for (const s of services) await deliverService(env, s);
 }
+async function processBpbOperation(env, o, panel) {
+  void panel;
+  if (o.kind === "buy" || o.kind === "trial") {
+    for (let i = o.results.length; i < o.quantity; i++) {
+      const serviceId = o.id + "_" + i;
+      // Idempotent retry: a slot already sold for this order+service is reused.
+      const existing = (await listBpbAccounts(env)).find(
+        (s) => s.sold_order_id === o.id && (s.sold_service_id === serviceId || !s.sold_service_id),
+      );
+      let slot, subUrl, expireAt;
+      if (existing && existing.status === "sold") {
+        slot = existing;
+        subUrl = `https://${slot.worker_name}.${slot.workers_dev_subdomain}/${slot.secure_path}/sub`;
+        expireAt = slot.expire_at;
+        if (!slot.sold_service_id) {
+          await updateBpbAccount(env, slot.id, { sold_service_id: serviceId });
+          slot = { ...slot, sold_service_id: serviceId };
+        }
+      } else {
+        const out = await assignBpbSlot(env, {
+          userId: o.userId,
+          orderId: o.id,
+          serviceId,
+          durationDays: o.plan.days || 30,
+        });
+        slot = out.account;
+        subUrl = out.subUrl;
+        expireAt = out.expireAt;
+      }
+      const a = o.accounts[i];
+      a.bpbAccountId = slot.id;
+      a.expiresAt = expireAt;
+      o.inFlightIndex = i;
+      await put(env, "operation", o.id, o);
+      o.results[i] = {
+        configs: [subUrl],
+        subscriptionUrl: subUrl,
+        dataLimit: a.dataLimit,
+        usedBytes: 0,
+        expiresAt: expireAt,
+        status: "active",
+        raw: { bpbAccountId: slot.id, panelUrl: slot.panel_url },
+      };
+      delete o.inFlightIndex;
+      await put(env, "operation", o.id, o);
+    }
+    return;
+  }
+  // renew: extend the linked slot expiry.
+  const svc = await ownedService(env, o.userId, o.serviceId);
+  const slot =
+    (await listBpbAccounts(env)).find((s) => s.sold_service_id === svc.id && s.status === "sold") ||
+    (await listBpbAccounts(env)).find(
+      (s) => s.sold_user_id === String(o.userId) && s.status === "sold" && s.sold_service_id === "",
+    );
+  assert(slot, "remote_service_missing", 404);
+  const baseTime = Math.max(epoch(), slot.expire_at || 0);
+  const addDays = o.plan.days || 30;
+  const newExpire = baseTime + addDays * 86400;
+  o.beforeRemote = { dataLimit: svc.dataLimit, expiresAt: slot.expire_at };
+  o.desired = { dataLimit: svc.dataLimit, expiresAt: newExpire };
+  o.dispatched = true;
+  o.targetAccount = { ...svc.remoteAccount, bpbAccountId: slot.id, expiresAt: newExpire, operationId: o.id };
+  await put(env, "operation", o.id, o);
+  const updated = await updateBpbAccount(env, slot.id, { expire_at: newExpire });
+  const subUrl = `https://${updated.worker_name}.${updated.workers_dev_subdomain}/${updated.secure_path}/sub`;
+  o.results = [
+    {
+      configs: [subUrl],
+      subscriptionUrl: subUrl,
+      dataLimit: svc.dataLimit,
+      usedBytes: svc.usedBytes || 0,
+      expiresAt: newExpire,
+      status: "active",
+      raw: { bpbAccountId: slot.id, panelUrl: updated.panel_url },
+    },
+  ];
+  assert(o.results[0], "provider_update_unconfirmed");
+}
 export async function processOperation(env, operationId) {
   const o = await get(env, "operation", operationId);
   if (!o || !["queued", "review", "sending"].includes(o.status)) return o;
@@ -701,7 +804,9 @@ export async function processOperation(env, operationId) {
   o.attempts++;
   await put(env, "operation", o.id, o);
   try {
-    if (panel.type === "stock") {
+    if (panel.type === "bpb") {
+      await processBpbOperation(env, o, panel);
+    } else if (panel.type === "stock") {
       for (let i = 0; i < o.stockIds.length; i++) {
         const row = await get(env, "stock", o.stockIds[i]);
         assert(
@@ -822,6 +927,7 @@ export async function reconcileOperation(env, operationId) {
   );
   const panel = await get(env, "panel", o.panelId);
   assert(panel && panel.type !== "stock", "manual_review_required");
+  if (panel.type === "bpb") return reconcileBpbOperation(env, o);
   const api = await connector(env, panel);
   if (o.serviceId) {
     const svc = await get(env, "service", o.serviceId),
@@ -853,13 +959,65 @@ export async function reconcileOperation(env, operationId) {
   await finalizeOperation(env, o);
   return operationView(o);
 }
+async function reconcileBpbOperation(env, o) {
+  if (o.serviceId) {
+    const slot = (await listBpbAccounts(env)).find((s) => s.sold_service_id === o.serviceId);
+    assert(slot && slot.status === "sold", "remote_creation_not_confirmed");
+    const subUrl = `https://${slot.worker_name}.${slot.workers_dev_subdomain}/${slot.secure_path}/sub`;
+    o.results = [
+      {
+        configs: [subUrl],
+        subscriptionUrl: subUrl,
+        dataLimit: o.desired?.dataLimit ?? 0,
+        usedBytes: 0,
+        expiresAt: slot.expire_at,
+        status: "active",
+        raw: { bpbAccountId: slot.id, panelUrl: slot.panel_url },
+      },
+    ];
+  } else {
+    for (let i = 0; i < o.quantity; i++) {
+      const serviceId = o.id + "_" + i;
+      const slot = (await listBpbAccounts(env)).find(
+        (s) => s.sold_order_id === o.id && s.sold_service_id === serviceId && s.status === "sold",
+      );
+      assert(slot, "remote_creation_not_confirmed");
+      const subUrl = `https://${slot.worker_name}.${slot.workers_dev_subdomain}/${slot.secure_path}/sub`;
+      o.results[i] = {
+        configs: [subUrl],
+        subscriptionUrl: subUrl,
+        dataLimit: o.accounts[i].dataLimit,
+        usedBytes: 0,
+        expiresAt: slot.expire_at,
+        status: "active",
+        raw: { bpbAccountId: slot.id, panelUrl: slot.panel_url },
+      };
+    }
+  }
+  await finalizeOperation(env, o);
+  return operationView(o);
+}
 export async function cancelOperation(env, userId, opId, admin = false) {
   const o = await get(env, "operation", opId);
   assert(o && (admin || o.userId === String(userId)), "operation_not_found");
   if (o.status !== "queued") {
     assert(admin && o.status === "review", "cannot_cancel_uncertain_operation");
-    const p = await get(env, "panel", o.panelId),
-      api = await connector(env, p);
+    const p = await get(env, "panel", o.panelId);
+    if (p.type === "bpb") {
+      // BPB slots are local rows: cancel is safe only if no slot was consumed.
+      if (o.serviceId) {
+        const slot = (await listBpbAccounts(env)).find((s) => s.sold_service_id === o.serviceId);
+        assert(!slot || slot.status !== "sold", "remote_user_exists_cannot_cancel");
+      } else {
+        for (let i = 0; i < o.quantity; i++) {
+          const slot = (await listBpbAccounts(env)).find(
+            (s) => s.sold_order_id === o.id && s.sold_service_id === o.id + "_" + i,
+          );
+          assert(!slot || slot.status !== "sold", "remote_user_exists_cannot_cancel");
+        }
+      }
+    } else {
+    const api = await connector(env, p);
     if (o.serviceId) {
       const s = await get(env, "service", o.serviceId),
         r = await api.get(s.remoteAccount);
@@ -878,6 +1036,7 @@ export async function cancelOperation(env, userId, opId, admin = false) {
           "partial_remote_creation_requires_cleanup",
         );
       }
+    }
     }
   }
   await releaseOperation(env, o, "cancelled");
@@ -978,6 +1137,7 @@ export async function synchronize(env, serviceId) {
   assert(s, "service_not_found");
   const p = await get(env, "panel", s.panelId);
   if (p.type === "stock") return s;
+  if (p.type === "bpb") return synchronizeBpb(env, s);
   const c = await connector(env, p);
   const r = await c.get(s.remoteAccount);
   assert(r, "remote_service_missing");
@@ -989,6 +1149,27 @@ export async function synchronize(env, serviceId) {
     remote: r.raw,
     subscriptionUrl: r.subscriptionUrl || s.subscriptionUrl,
     configs: r.configs?.length ? r.configs : s.configs,
+    lastSyncAt: Date.now(),
+    lastSyncError: "",
+  });
+  await put(env, "service", s.id, s);
+  return s;
+}
+async function synchronizeBpb(env, s) {
+  const slotId = s.remoteAccount?.bpbAccountId;
+  const slot = slotId
+    ? await getBpbAccount(env, slotId)
+    : (await listBpbAccounts(env)).find((r) => r.sold_service_id === s.id);
+  assert(slot, "remote_service_missing", 404);
+  const subUrl = `https://${slot.worker_name}.${slot.workers_dev_subdomain}/${slot.secure_path}/sub`;
+  const expired = slot.status !== "sold" || (slot.expire_at && slot.expire_at <= epoch());
+  Object.assign(s, {
+    usedBytes: s.usedBytes || 0,
+    expiresAt: slot.expire_at || s.expiresAt,
+    status: expired ? "expired" : slot.status === "sold" ? "active" : s.status,
+    remote: { bpbAccountId: slot.id, panelUrl: slot.panel_url },
+    subscriptionUrl: subUrl,
+    configs: [subUrl],
     lastSyncAt: Date.now(),
     lastSyncError: "",
   });
@@ -1056,6 +1237,14 @@ export async function simpleServiceAction(
     ["enable", "disable", "revoke"].includes(action),
     "invalid_service_action",
   );
+  if (panel.type === "bpb") {
+    // BPB slots have no per-user remote login; enable/disable flips local
+    // status only, revoke is managed via the BPB section (rotation frees it).
+    assert(action !== "revoke", "panel_action_unsupported");
+    s.status = action === "enable" ? "active" : "disabled";
+    await put(env, "service", s.id, s);
+    return synchronize(env, s.id);
+  }
   if (action === "revoke") {
     const uuid = crypto.randomUUID(),
       subId = id();
@@ -1075,6 +1264,46 @@ async function connectionHash(remote) {
       remote.subscriptionUrl || "",
     ]),
   );
+}
+async function decideBpbRefund(env, r, s, b) {
+  assert(r.status === "pending", "cannot_reject_uncertain_request");
+  if (b.approve === false || !b.approve) {
+    r.status = "rejected";
+    r.answer = str(b.answer, 1000);
+    await put(env, "request", r.id, r);
+    return r;
+  }
+  r.amount = integer(b.amount, 0, s.paidTotal || 0);
+  r.status = "processing";
+  s.actionLock = r.id;
+  await commitJson(env, [
+    [key("service", s.id), s],
+    [key("request", r.id), r],
+  ]);
+  // Free the linked slot without CF rotation (admin rotates via BPB API if needed).
+  const slot = (await listBpbAccounts(env)).find((x) => x.sold_service_id === s.id && x.status === "sold");
+  s.status = "refunded";
+  s.refundedAt = Date.now();
+  delete s.actionLock;
+  const change = await walletWrites(env, s.payerId || s.userId, {
+    delta: r.amount,
+    eventId: "refund:" + s.id,
+    reason: "service_refund",
+  });
+  r.status = "approved";
+  const writes = [
+    ...change.writes,
+    [key("service", s.id), s],
+    [key("request", r.id), r],
+  ];
+  if (slot) {
+    writes.push([
+      key("bpb-account", slot.id),
+      { ...slot, status: "free", sold_order_id: "", sold_service_id: "", sold_user_id: "", expire_at: 0, updated_at: Date.now() },
+    ]);
+  }
+  await commitJson(env, writes);
+  return r;
 }
 export async function decideServiceRequest(env, requestId, b) {
   const r = await get(env, "request", requestId);
@@ -1105,8 +1334,11 @@ export async function decideServiceRequest(env, requestId, b) {
     return r;
   }
   if (r.kind === "move") return migrateService(env, r, s, b);
-  const panel = await get(env, "panel", s.panelId),
-    c = await connector(env, panel),
+  const panel = await get(env, "panel", s.panelId);
+  assert(panel, "panel_not_found");
+  if (panel.type === "bpb" && r.kind === "transfer") throw new Error("panel_action_unsupported");
+  if (panel.type === "bpb" && r.kind === "refund") return decideBpbRefund(env, r, s, b);
+  const c = await connector(env, panel),
     recover = r.status === "review";
   if (!recover) {
     if (r.kind === "refund") r.amount = integer(b.amount, 0, s.paidTotal || 0);
@@ -1234,11 +1466,18 @@ export async function serviceTick(env) {
         fresh.expiresAt > 0 &&
         epoch() - fresh.expiresAt > settings.deleteExpiredDays * 86400
       ) {
-        await (
-          await connector(env, await get(env, "panel", fresh.panelId))
-        ).remove(fresh.remoteAccount);
-        fresh.status = "deleted";
-        await put(env, "service", fresh.id, fresh);
+        const ownerPanel = await get(env, "panel", fresh.panelId);
+        if (ownerPanel?.type === "bpb") {
+          // BPB cleanup is owned by bpbTick (slot revoke + rotation), not connector.remove.
+          fresh.status = "expired";
+          await put(env, "service", fresh.id, fresh);
+        } else {
+          await (
+            await connector(env, ownerPanel)
+          ).remove(fresh.remoteAccount);
+          fresh.status = "deleted";
+          await put(env, "service", fresh.id, fresh);
+        }
       }
     } catch (e) {
       s.lastSyncError = e.message;

@@ -2,6 +2,8 @@ import { serviceEngagementTick } from "./services/engagement.js";
 import managedRoutes, { managedPublic, TENANT_KEY } from './services/managed-bots.js';
 import { unseal as unsealManaged } from './services/common.js';
 import serviceRoutes, { portal } from './services/routes.js';
+import bpbRoutes from './services/bpb/routes.js';
+import { bpbTick } from './services/bpb/service.js';
 import { serviceTick } from './services/engine.js';
 import { fundingTick, handleServicePayment } from './services/payments.js';
 import { backupTick } from './services/reports.js';
@@ -42,7 +44,7 @@ api.use('*', async (c, next) => {
   return bodyLimit({maxSize,onError:c=>c.json({ok:false,error:'request_too_large'},413)})(c,next);
 });
 api.use('*', async (c, next) => { c.header('cache-control', 'no-store'); c.header('x-content-type-options', 'nosniff'); await next(); });
-for (const [path, routes] of Object.entries({ auth: authRoutes, dashboard: dashboardRoutes, users: usersRoutes, broadcast: broadcastRoutes, engagement: engagementRoutes, support: supportRoutes, menu: menuRoutes, news: newsRoutes, rates: ratesRoutes, settings: settingsRoutes, media: mediaRoutes, studio: studioRoutes, creator: creatorRoutes, services: serviceRoutes, portal, bots: managedRoutes })) api.route('/' + path, routes);
+for (const [path, routes] of Object.entries({ auth: authRoutes, dashboard: dashboardRoutes, users: usersRoutes, broadcast: broadcastRoutes, engagement: engagementRoutes, support: supportRoutes, menu: menuRoutes, news: newsRoutes, rates: ratesRoutes, settings: settingsRoutes, media: mediaRoutes, studio: studioRoutes, creator: creatorRoutes, services: serviceRoutes, bpb: bpbRoutes, portal, bots: managedRoutes })) api.route('/' + path, routes);
 api.get('/health', c => c.json({ ok: true, data: { ts: Date.now(), version: c.env.APP_VERSION || '2.0.0', colo: c.req.raw.cf?.colo || null, durable: !!c.env.__coordinated } }));
 api.notFound(c => c.json({ ok: false, error: 'not_found' }, 404));
 api.onError((err, c) => {
@@ -57,7 +59,7 @@ export async function runScheduled(env) {
   const errors = [];
   await putJson(env, 'v2:runtime:cron', { at, status: 'running' });
   // Each subsystem records its own delivery results; one failure must not stop the others.
-  for (const [name, fn] of Object.entries({ orders: expireOrders, groups: groupTick, broadcasts: broadcastTick, feeds: feedTick, relay: relayTick, news: newsTick, rates: ratesTick, services: serviceTick, funding: fundingTick, backups: backupTick, servicesExtra: serviceEngagementTick })) {
+  for (const [name, fn] of Object.entries({ orders: expireOrders, groups: groupTick, broadcasts: broadcastTick, feeds: feedTick, relay: relayTick, news: newsTick, rates: ratesTick, services: serviceTick, bpb: bpbTick, funding: fundingTick, backups: backupTick, servicesExtra: serviceEngagementTick })) {
     try { await fn(env); } catch (e) { errors.push({ name, error: String(e.message).slice(0, 160) }); }
   }
   await putJson(env, 'v2:runtime:cron', { at, finishedAt: Date.now(), status: errors.length ? 'partial' : 'ok', errors });
