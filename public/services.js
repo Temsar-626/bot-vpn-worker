@@ -203,6 +203,22 @@ vError = (code) => {
       "این عمل در API این نوع پنل پشتیبانی نمی‌شود.",
       "This provider API does not support the action.",
     ),
+    bpb_no_free_slot: L(
+      "اسلات آزاد BPB موجود نیست؛ ابتدا اکانت نصب کنید.",
+      "No free BPB slot. Install an account first.",
+    ),
+    bpb_slot_sold: L(
+      "این اسلات فروخته شده است.",
+      "This slot is sold.",
+    ),
+    bpb_not_installed: L(
+      "این اکانت هنوز نصب نشده است.",
+      "This account is not installed yet.",
+    ),
+    provider_http_404: L(
+      "منبع در مقصد یافت نشد.",
+      "Remote resource not found.",
+    ),
     quote_expired: L("پیش‌فاکتور منقضی شده است.", "Quote expired."),
     quote_changed: L(
       "قیمت یا تنظیمات تغییر کرده؛ دوباره پیش‌فاکتور بگیرید.",
@@ -320,6 +336,7 @@ const SV_TABS = [
   ["requests", "inbox", ["درخواست‌ها", "Requests"]],
   ["coupons", "ticket-percent", ["تخفیف و هدیه", "Promotions"]],
   ["campaigns", "trophy", ["گردونه و قرعه‌کشی", "Rewards"]],
+  ["bpb", "cloud", ["BPB", "BPB"]],
   ["settings", "settings", ["تنظیمات", "Settings"]],
   ["backup", "archive", ["گزارش و پشتیبان", "Reports & backup"]],
 ];
@@ -393,6 +410,7 @@ async function svContent() {
     requests: svRequests,
     coupons: svPromotions,
     campaigns: svCampaigns,
+    bpb: svBpb,
     settings: svSettings,
     backup: svBackup,
   }[SV.tab]();
@@ -1859,4 +1877,66 @@ ACTIONS.svDiceSave = async () => {
     },
   });
   toast(t("saved"), "success");
+};
+
+// ---- BPB (Cloudflare Workers) ----
+const bpbAPI = (path, opts) => api("/bpb" + path, opts);
+const bpbStatus = (s) => ({
+  pending_install: L("در انتظار نصب", "Pending install"),
+  free: L("آزاد", "Free"),
+  sold: L("فروخته‌شده", "Sold"),
+  error: L("خطا", "Error"),
+  disabled: L("غیرفعال", "Disabled"),
+})[s] || s;
+const bpbBadge = (v) => `<span class="v-badge ${["free"].includes(v) ? "good" : ["sold", "pending_install"].includes(v) ? "warn" : ["error"].includes(v) ? "bad" : ""}">${bpbStatus(v)}</span>`;
+async function svBpb() {
+  const d = await bpbAPI("/accounts");
+  SV.cache.bpb = d.rows;
+  const c = d.counts || {};
+  const head = `<div class="v-grid v-stagger">${[["free", c.free || 0, L("اسلات آزاد", "Free slots")], ["sold", c.sold || 0, L("فروخته‌شده", "Sold")], ["error", c.error || 0, L("خطا", "Errors")]].map(([k, n, l]) => `<div class="${CLS.card} p-5"><strong class="block text-2xl">${fmtNum(n)}</strong><span class="v-meta">${l}</span></div>`).join("")}</div>`;
+  const rows = d.rows.length ? d.rows.map((r) => `<div class="v-row"><span class="v-icon">${vIcon("cloud")}</span><div class="v-row-main"><p class="text-sm font-bold">${esc(r.label)} ${bpbBadge(r.status)}</p><p class="v-meta">${esc(r.cf_email || "")} · ${esc(r.worker_name || "")}${r.panel_url ? `<br><span class="v-code" dir="ltr">${esc(r.panel_url)}</span>` : ""}${r.status === "sold" && r.expire_at ? `<br>${L("انقضا", "Expires")}: ${fmtDate(r.expire_at * 1000)}` : ""}${r.last_error ? `<br><span class="text-rose-400">${esc(r.last_error)}</span>` : ""}</p></div><div class="v-actions">${["pending_install", "error"].includes(r.status) ? svBtn(L("نصب", "Install"), "bpbInstall", `data-id="${r.id}"`) : ""}${r.status === "sold" ? svBtn(L("قطع دسترسی", "Revoke"), "bpbRevoke", `data-id="${r.id}"`) : ""}${r.status !== "sold" ? svBtn(L("حذف", "Delete"), "bpbDelete", `data-id="${r.id}"`) : ""}${r.panel_url ? svBtn(L("تنظیمات", "Settings"), "bpbSettings", `data-id="${r.id}"`) : ""}</div></div>`).join("") : vEmpty(L("اولین اکانت Cloudflare را با API Token اضافه کنید. هر اکانت = یک Worker.", "Add your first Cloudflare account with an API token. One account = one Worker."), "cloud");
+  return svRows(head + vSection(L("اکانت‌های Cloudflare / اسلات‌های BPB", "Cloudflare accounts / BPB slots"), rows, svBtn(L("اکانت جدید", "New account"), "bpbNew", "", true) + svBtn(L("تنظیمات گروهی", "Bulk settings"), "bpbBulk")) + vNote(L("توکن CF با VAULT_KEY رمز می‌شود و هرگز برنمی‌گردد. برای فروش، یک پنل از نوع BPB بسازید و پلن را به آن وصل کنید؛ خرید، اسلات آزاد را می‌گیرد.", "CF tokens are sealed with VAULT_KEY and never returned. To sell, create a BPB-type provider and attach plans to it; purchases consume a free slot."), true));
+}
+ACTIONS.bpbNew = () => vModal(L("اکانت Cloudflare جدید", "New Cloudflare account"), vField("bpb-label", L("نام نمایشی", "Label"), "", 'required maxlength="100"') + vField("bpb-token", L("API Token کلادفلر", "Cloudflare API token"), "", 'type="password" required dir="ltr" autocomplete="new-password"') + vNote(L("دسترسی پیشنهادی: Edit Workers + خواندن Account Settings + KV. توکن فقط رمزنگاری‌شده ذخیره می‌شود.", "Suggested scope: edit Workers, read account settings, KV. The token is stored sealed only.")), "bpbSave");
+ACTIONS.bpbSave = async () => {
+  await bpbAPI("/accounts", { method: "POST", body: { label: vVal("bpb-label"), apiToken: vVal("bpb-token") } });
+  closeModal(); toast(t("saved"), "success"); SV.html = {}; svRefresh();
+};
+ACTIONS.bpbInstall = async (d, el) => {
+  el.disabled = true;
+  try { const r = await bpbAPI("/accounts/" + d.id + "/install", { method: "POST" }); toast(r.account.panel_url || t("saved"), "success"); SV.html = {}; await svRefresh(); }
+  catch (e) { toast(vError(e.message), "error"); } finally { el.disabled = false; }
+};
+ACTIONS.bpbRevoke = async (d, el) => {
+  if (!(await confirmDlg(L("لینک ساب این اسلات می‌میرد و اسلات آزاد می‌شود. ادامه؟", "The sub link will die and the slot returns to free. Continue?"), L("قطع دسترسی", "Revoke")))) return;
+  el.disabled = true;
+  try { await bpbAPI("/accounts/" + d.id + "/revoke", { method: "POST" }); toast(t("saved"), "success"); SV.html = {}; await svRefresh(); }
+  catch (e) { toast(vError(e.message), "error"); } finally { el.disabled = false; }
+};
+ACTIONS.bpbDelete = async (d) => {
+  if (!(await confirmDlg(L("این اکانت حذف شود؟ (ورکر هم در صورت امکان پاک می‌شود)", "Delete this account? (The worker is removed if reachable)"), t("remove")))) return;
+  await bpbAPI("/accounts/" + d.id, { method: "DELETE" }); SV.html = {}; svRefresh();
+};
+ACTIONS.bpbSettings = (d) => {
+  const r = (SV.cache.bpb || []).find((x) => x.id === d.id) || { settings: {} };
+  const s = r.settings || {};
+  SV.edit = { id: d.id };
+  vModal(L("تنظیمات BPB", "BPB settings"), vField("bpb-proxyips", L("Proxy IP / Clean IP (با کاما)", "Proxy IPs (comma-separated)"), (s.proxyIPs || []).join(", "), 'dir="ltr"') + vSelect("bpb-proxymode", L("حالت Proxy IP", "Proxy IP mode"), [["proxyip", "proxyip"], ["direct", "direct"], ["none", "none"]], s.proxyIpMode || "proxyip") + vField("bpb-fallback", L("Fallback (اختیاری)", "Fallback (optional)"), s.fallback || "", 'dir="ltr"') + vField("bpb-doh", L("DoH URL (اختیاری، https)", "DoH URL (optional, https)"), s.dohUrl || "", 'dir="ltr"'), "bpbSettingsSave");
+};
+ACTIONS.bpbSettingsSave = async () => {
+  await bpbAPI("/accounts/" + SV.edit.id + "/settings", { method: "PUT", body: { settings: { proxyIPs: vList(vVal("bpb-proxyips")), proxyIpMode: vVal("bpb-proxymode"), fallback: vVal("bpb-fallback"), dohUrl: vVal("bpb-doh") } } });
+  closeModal(); toast(t("saved"), "success"); SV.html = {}; svRefresh();
+};
+ACTIONS.bpbBulk = () => vModal(L("تنظیمات گروهی BPB", "BPB bulk settings"), vField("bpb-bulk-ids", L("آیدی‌ها با کاما (خالی = همه آزاد/خطا)", "IDs comma-separated (empty = all free/error)"), "", 'dir="ltr"') + vField("bpb-bulk-ips", L("Proxy IPها", "Proxy IPs"), "", 'dir="ltr"') + vSelect("bpb-bulk-mode", L("حالت Proxy IP", "Proxy IP mode"), [["", L("بدون تغییر", "No change")], ["proxyip", "proxyip"], ["direct", "direct"], ["none", "none"]], ""), "bpbBulkSave");
+ACTIONS.bpbBulkSave = async () => {
+  let ids = vList(vVal("bpb-bulk-ids"));
+  if (!ids.length) ids = (SV.cache.bpb || []).filter((r) => ["free", "error"].includes(r.status)).map((r) => r.id);
+  const settings = {};
+  if (vVal("bpb-bulk-ips")) settings.proxyIPs = vList(vVal("bpb-bulk-ips"));
+  if (vVal("bpb-bulk-mode")) settings.proxyIpMode = vVal("bpb-bulk-mode");
+  const r = await bpbAPI("/accounts/bulk-settings", { method: "POST", body: { ids, settings } });
+  closeModal();
+  const ok = r.results.filter((x) => x.ok).length, fail = r.results.length - ok;
+  toast(`${ok} ✓${fail ? ` · ${fail} ✗` : ""}`, fail ? "error" : "success");
+  SV.html = {}; svRefresh();
 };
