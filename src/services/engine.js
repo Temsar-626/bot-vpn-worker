@@ -23,7 +23,7 @@ import {
 } from "./common.js";
 import { serviceSettings } from "./settings.js";
 import { PROVIDERS, connector, prepareAccount } from "./providers.js";
-import { assignBpbSlot, findBpbSlotForService, proRataRefund } from "./bpb/service.js";
+import { assignBpbSlot, findBpbSlotForService, proRataRefund, refreshBpbUsage } from "./bpb/service.js";
 import { slotSubLinks } from "./bpb/script.js";
 import {
   getBpbAccount,
@@ -1082,9 +1082,9 @@ async function deliverText(env, service) {
       : "—";
     const gb = service.dataLimit ? (service.dataLimit / GB).toFixed(0) + " GB" : "∞";
     return (
-      `✅ سرویس BPB شما آماده است!\n${service.title}\n\n🔗 لینک اشتراک:\n${link}\n\n` +
+      `✅ سرویس شما آماده است!\n${service.title}\n\n🔗 لینک اشتراک:\n${link}\n\n` +
       `📦 حجم: ${gb} · 📅 انقضا: ${exp}\nسقف مصرف منصفانه طبق توضیحات پلن است.\n\n` +
-      `✅ Your BPB service is ready!\nSubscription:\n${link}\n\nQuota: ${gb} · Expires: ${exp}`
+      `✅ Your service is ready!\nSubscription:\n${link}\n\nQuota: ${gb} · Expires: ${exp}`
     );
   }
   return `✅ سرویس شما آماده است / Service ready\n${service.title}\n${service.username}\n\nبرای مشاهده کانفیگ، QR و مدیریت سرویس از دکمه زیر استفاده کنید.`;
@@ -1200,13 +1200,15 @@ async function synchronizeBpb(env, s) {
     ? await getBpbAccount(env, slotId)
     : (await listBpbAccounts(env)).find((r) => r.sold_service_id === s.id);
   assert(slot, "remote_service_missing", 404);
-  const links = slotSubLinks(slot);
-  const expired = slot.status !== "sold" || (slot.expire_at && slot.expire_at <= epoch());
+  // Best-effort usage refresh (cached 30 min, never fails the sync).
+  const freshSlot = await refreshBpbUsage(env, slot);
+  const links = slotSubLinks(freshSlot);
+  const expired = freshSlot.status !== "sold" || (freshSlot.expire_at && freshSlot.expire_at <= epoch());
   Object.assign(s, {
     usedBytes: s.usedBytes || 0,
-    expiresAt: slot.expire_at || s.expiresAt,
-    status: expired ? "expired" : slot.status === "sold" ? "active" : s.status,
-    remote: { bpbAccountId: slot.id, panelUrl: slot.panel_url },
+    expiresAt: freshSlot.expire_at || s.expiresAt,
+    status: expired ? "expired" : freshSlot.status === "sold" ? "active" : s.status,
+    remote: { bpbAccountId: freshSlot.id, panelUrl: freshSlot.panel_url },
     subscriptionUrl: links.subUrl,
     configs: links.links,
     lastSyncAt: Date.now(),

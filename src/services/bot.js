@@ -22,6 +22,7 @@ import {
   simpleServiceAction,
   bpbRefundQuote,
 } from "./engine.js";
+import { bpbDailyEstimate } from "./bpb/service.js";
 import { createPayment, attachReceipt, paymentView } from "./payments.js";
 import {
   customerGate,
@@ -340,10 +341,11 @@ async function showService(env, user, lang, serviceId) {
   const s = await ownedService(env, user.id, serviceId);
   const panel = s.panelId ? await get(env, "panel", s.panelId) : null;
   const isBpb = panel?.type === "bpb" && !["deleted", "refunded", "cancelled"].includes(s.status);
+  const daily = isBpb ? await bpbDailyEstimate(env, s) : null;
   return say(
     env,
     user,
-    `📡 ${s.title}\n${s.username}\n${s.status}\n${tr("حجم", "Quota", lang)}: ${s.dataLimit ? (s.dataLimit / 1073741824).toFixed(2) + " GB" : "∞"}\n${tr("زمان", "Expiry", lang)}: ${s.expiresAt ? new Date(s.expiresAt * 1000).toISOString().slice(0, 10) : "—"}\n${s.lastSyncError ? "⚠️ " + tr("بروزرسانی اطلاعات پنل ناموفق بوده است.", "Provider refresh failed.", lang) : ""}`,
+    `📡 ${s.title}\n${s.username}\n${s.status}\n${tr("حجم", "Quota", lang)}: ${s.dataLimit ? (s.dataLimit / 1073741824).toFixed(2) + " GB" : "∞"}\n${tr("زمان", "Expiry", lang)}: ${s.expiresAt ? new Date(s.expiresAt * 1000).toISOString().slice(0, 10) : "—"}${daily ? `\n${tr("مصرف امروز (تخمینی)", "Estimated use today", lang)}: ${daily.usedGB} / ${daily.quotaGB} GB` : ""}\n${s.lastSyncError ? "⚠️ " + tr("بروزرسانی اطلاعات پنل ناموفق بوده است.", "Provider refresh failed.", lang) : ""}`,
     [
       [
         btn(

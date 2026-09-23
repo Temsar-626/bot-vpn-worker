@@ -107,7 +107,9 @@ export const PROVIDERS = {
   },
   bpb: {
     label: "BPB (Cloudflare Workers)",
-    capabilities: ["create", "read", "renew", "revoke"],
+    // No "revoke": link rotation is owned by the BPB section/expiry path, so
+    // buyer UIs never offer a manual rotate/transfer button for BPB services.
+    capabilities: ["create", "read", "renew"],
     hint: "هر اکانت Cloudflare = یک Worker = یک اسلات فروش (مدیریت در بخش BPB)",
   },
 };

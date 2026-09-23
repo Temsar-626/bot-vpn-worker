@@ -206,3 +206,41 @@ export async function kvRead(token, accountId, namespaceId, key, fetchFn = globa
 }
 
 export const CF_BASE_URL = CF_BASE;
+
+/**
+ * Worker request count for the last `hours` (default 24h) via the
+ * Cloudflare GraphQL Analytics API. Used as a rough daily-usage proxy
+ * against the 100k requests/day Workers allowance.
+ * Returns a number or null on any failure (missing permission, bad schema,
+ * network). Never throws — callers treat null as "unknown".
+ */
+export async function fetchWorkerRequests(token, accountId, workerName, fetchFn = globalThis.fetch, hours = 24) {
+  try {
+    const since = new Date(Date.now() - hours * 3600 * 1000).toISOString();
+    const res = await fetchFn(`${CF_BASE}/graphql`, {
+      method: "POST",
+      headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+      body: JSON.stringify({
+        query: `query($accountTag: String!, $scriptName: String!, $since: Time!) {
+          viewer {
+            accounts(filter: {accountTag: $accountTag}) {
+              workersInvocationsAdaptive(filter: {scriptName: $scriptName, datetime_geq: $since}, limit: 1000) {
+                sum { requests }
+              }
+            }
+          }
+        }`,
+        variables: { accountTag: accountId, scriptName: workerName, since },
+      }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json().catch(() => null);
+    const rows = data?.data?.viewer?.accounts?.[0]?.workersInvocationsAdaptive || [];
+    let total = 0;
+    for (const row of rows) total += Number(row?.sum?.requests) || 0;
+    return Number.isFinite(total) ? total : null;
+  } catch {
+    return null;
+  }
+}

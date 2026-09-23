@@ -63,6 +63,7 @@ import {
   cancelOperation,
   operationView,
   manualStockSale,
+  bpbRefundQuote,
 } from "./engine.js";
 import {
   GATEWAYS,
@@ -93,6 +94,7 @@ import {
   restoreBackup,
 } from "./reports.js";
 import { readJson, readForm } from "../body.js";
+import { bpbDailyEstimate } from "./bpb/service.js";
 
 const result = (c, data) => c.json({ ok: true, data });
 const body = (c) => readJson(c);
@@ -109,6 +111,12 @@ const recent = (rows, field = "createdAt") =>
   rows.sort((a, b) => (b[field] || 0) - (a[field] || 0));
 export async function serviceView(env, s) {
   const p = await get(env, "panel", s.panelId);
+  let dailyEstimate = null;
+  if (p?.type === "bpb") {
+    try {
+      dailyEstimate = await bpbDailyEstimate(env, s);
+    } catch {}
+  }
   return {
     id: s.id,
     userId: s.userId,
@@ -132,6 +140,7 @@ export async function serviceView(env, s) {
     usageAvailable: !["stock", "mikrotik", "ibsng"].includes(p?.type),
     deliveryState: s.deliveryState,
     capabilities: PROVIDERS[p?.type]?.capabilities || [],
+    ...(dailyEstimate ? { dailyEstimate } : {}),
   };
 }
 const admin = new Hono();
@@ -717,6 +726,13 @@ portal.post("/services/:id/action", async (c) => {
     b,
   );
   return result(c, { result: r.kind ? r : await serviceView(c.env, r) });
+});
+portal.get("/services/:id/cancel-quote", async (c) => {
+  const s = await ownedService(c.env, c.get("customer").id, c.req.param("id"));
+  const panel = await get(c.env, "panel", s.panelId);
+  assert(panel?.type === "bpb", "panel_action_unsupported");
+  const q = await bpbRefundQuote(c.env, s);
+  return result(c, { remainingDays: q.remainingDays, totalDays: q.totalDays, amount: q.amount });
 });
 portal.post("/quote", async (c) => {
   await limited(c.env, "quote:" + c.get("customer").id, 20, 60);

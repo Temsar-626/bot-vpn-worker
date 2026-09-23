@@ -1,7 +1,7 @@
 // BPB orchestration: install / assign / revoke / settings / tick.
 // One Cloudflare account = exactly one Worker = one concurrent sale slot.
 
-import { assert, epoch } from "../common.js";
+import { assert, epoch, get } from "../common.js";
 import {
   verifyToken,
   createKvNamespace,
@@ -10,6 +10,7 @@ import {
   deployWorker,
   enableWorkerSubdomain,
   deleteWorker,
+  fetchWorkerRequests,
   kvWrite,
 } from "./cloudflare.js";
 import {
@@ -219,13 +220,71 @@ export async function findBpbSlotForService(env, serviceId) {
   return rows.find((s) => s.sold_service_id === String(serviceId) && s.status === "sold") || null;
 }
 
+export const BPB_DAILY_REQUEST_ALLOWANCE = 100000;
+const USAGE_CACHE_TTL = 30 * 60000;
+
 /**
- * Pro-rata refund quote: remaining full days over total days times paid total.
+ * Best-effort refresh of a slot's 24h request count (cached 30 min).
+ * Never throws and never fails the caller (sync/purchase keep working
+ * without usage data — the estimate is simply hidden).
+ */
+export async function refreshBpbUsage(env, slot, deps = {}) {
+  const fetchFn = deps.fetchFn || globalThis.fetch;
+  try {
+    const cache = slot.usage_cache;
+    if (cache && Date.now() - (cache.at || 0) < USAGE_CACHE_TTL) return slot;
+    if (!slot.cf_account_id || !slot.worker_name) return slot;
+    const token = await getBpbToken(env, slot);
+    const requests = await fetchWorkerRequests(token, slot.cf_account_id, slot.worker_name, fetchFn);
+    if (requests === null) return slot;
+    return await updateBpbAccount(env, slot.id, {
+      usage_cache: { at: Date.now(), requests },
+    });
+  } catch {
+    return slot;
+  }
+}
+
+/**
+ * Daily usage estimate for a buyer-facing service: the 24h request count
+ * mapped proportionally onto the plan's daily quota
+ * (dailyQuota = dataLimit / plan days, e.g. 150GB/30d = 5GB/day).
+ * Returns null when unknown (never blocks).
+ */
+export async function bpbDailyEstimate(env, service) {
+  try {
+    const slotId = service.remoteAccount?.bpbAccountId;
+    const slot = slotId
+      ? await getBpbAccount(env, slotId)
+      : await findBpbSlotForService(env, service.id);
+    if (!slot?.usage_cache || typeof slot.usage_cache.requests !== "number") return null;
+    const plan = service.planId ? await get(env, "plan", service.planId) : null;
+    const days = plan?.days || 30;
+    if (!service.dataLimit || !days) return null;
+    const quotaGB = service.dataLimit / days / 1073741824;
+    const frac = Math.min(1, Math.max(0, slot.usage_cache.requests / BPB_DAILY_REQUEST_ALLOWANCE));
+    const round2 = (n) => Math.round(n * 100) / 100;
+    return {
+      usedGB: round2(quotaGB * frac),
+      remainingGB: round2(quotaGB * (1 - frac)),
+      quotaGB: round2(quotaGB),
+      requests: slot.usage_cache.requests,
+      at: slot.usage_cache.at,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Pro-rata refund quote: full remaining days over total days times paid total.
+ * The current day always counts as used: cancelling 30 minutes into a
+ * 30-day/150k plan refunds 29 days (145k), never the full amount.
  * Pure math — pass resolved inputs, easy to test.
  */
 export function proRataRefund({ paidTotal = 0, totalDays = 0, expireAt = 0, nowSec = epoch() }) {
   const total = Math.max(0, Number(totalDays) || 0);
-  const remaining = Math.max(0, Math.ceil((Number(expireAt) - nowSec) / 86400));
+  const remaining = Math.max(0, Math.floor((Number(expireAt) - nowSec) / 86400));
   const paid = Math.max(0, Math.floor(Number(paidTotal) || 0));
   if (!total || !remaining || !paid) return { remainingDays: remaining, totalDays: total, amount: 0 };
   const capped = Math.min(remaining, total);

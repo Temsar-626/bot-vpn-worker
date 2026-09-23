@@ -65,7 +65,10 @@ function cfMock() {
 test("bpb provider is registered with slot capabilities", () => {
   assert(PROVIDERS.bpb);
   assert(PROVIDERS.bpb.capabilities.includes("create"));
-  assert(PROVIDERS.bpb.capabilities.includes("revoke"));
+  assert(PROVIDERS.bpb.capabilities.includes("renew"));
+  // No revoke/nodes: rotation lives in the BPB expiry path so buyer UIs
+  // never offer manual rotate/transfer for BPB services.
+  assert(!PROVIDERS.bpb.capabilities.includes("revoke"));
   assert(!PROVIDERS.bpb.capabilities.includes("nodes"));
 });
 
@@ -223,12 +226,50 @@ test("install defaults merge and panel password is pre-seeded in KV", async () =
 test("pro-rata refund math is exact on boundaries", async () => {
   const { proRataRefund } = await import("../src/services/bpb/service.js");
   const now = 1_700_000_000;
-  // 150k toman, 30 days, 15 days left -> 75k.
+  // 150k toman, 30 days, exactly 15 days left -> 75k.
   assert.deepEqual(proRataRefund({ paidTotal: 150000, totalDays: 30, expireAt: now + 15 * 86400, nowSec: now }), { remainingDays: 15, totalDays: 30, amount: 75000 });
-  // Expired -> 0, full remaining capped at total.
+  // Same-day cancel deducts the current day: 30min in -> 29 days -> 145k.
+  assert.deepEqual(proRataRefund({ paidTotal: 150000, totalDays: 30, expireAt: now + 30 * 86400 - 1800, nowSec: now }), { remainingDays: 29, totalDays: 30, amount: 145000 });
+  // Expired -> 0, over-long remaining capped at total.
   assert.equal(proRataRefund({ paidTotal: 150000, totalDays: 30, expireAt: now - 1, nowSec: now }).amount, 0);
   assert.equal(proRataRefund({ paidTotal: 100, totalDays: 30, expireAt: now + 60 * 86400, nowSec: now }).amount, 100);
   assert.equal(proRataRefund({ paidTotal: 0, totalDays: 30, expireAt: now + 5 * 86400, nowSec: now }).amount, 0);
+});
+
+test("worker request analytics parses GraphQL and fails soft", async () => {
+  const { fetchWorkerRequests } = await import("../src/services/bpb/cloudflare.js");
+  const ok = async () => Response.json({ data: { viewer: { accounts: [{ workersInvocationsAdaptive: [{ sum: { requests: 40000 } }, { sum: { requests: 10000 } }] }] } } });
+  assert.equal(await fetchWorkerRequests("T", "A", "w", ok), 50000);
+  const denied = async () => new Response("forbidden", { status: 403 });
+  assert.equal(await fetchWorkerRequests("T", "A", "w", denied), null);
+  const broken = async () => { throw new Error("down"); };
+  assert.equal(await fetchWorkerRequests("T", "A", "w", broken), null);
+});
+
+test("daily estimate maps requests proportionally onto plan quota", async () => {
+  const { savePanel } = await import("../src/services/providers.js");
+  const { savePlan } = await import("../src/services/engine.js");
+  const { put } = await import("../src/services/common.js");
+  const { bpbDailyEstimate } = await import("../src/services/bpb/service.js");
+  const { updateBpbAccount } = await import("../src/services/bpb/store.js");
+  const pool = await savePanel(env, { title: "BPB est", type: "bpb" });
+  const plan = await savePlan(env, { title: "BPB 150", panelId: pool.id, days: 30, volumeGB: 150, price: 150000 });
+  const row = await createBpbAccount(env, { label: "est", apiToken: "CF_TOKEN_ABCDEF123456" });
+  await updateBpbAccount(env, row.id, {
+    status: "sold", worker_name: "w", workers_dev_subdomain: "s.workers.dev",
+    secure_path: "SECURE123456", sold_service_id: "svc-est",
+    usage_cache: { at: Date.now(), requests: 50000 },
+  });
+  await put(env, "service", "svc-est", {
+    id: "svc-est", userId: "42", panelId: pool.id, planId: plan.id,
+    title: "t", username: "u", status: "active", configs: [], subscriptionUrl: "",
+    dataLimit: 150 * 1073741824, usedBytes: 0, expiresAt: 0,
+    remoteAccount: { bpbAccountId: row.id }, ownerToken: "d".repeat(64),
+  });
+  const est = await bpbDailyEstimate(env, await (await import("../src/services/common.js")).get(env, "service", "svc-est"));
+  // 50k/100k of 5GB/day -> 2.5 used, 2.5 remaining.
+  assert.deepEqual(est, { usedGB: 2.5, remainingGB: 2.5, quotaGB: 5, requests: 50000, at: est.at });
+  assert(Number.isFinite(est.at));
 });
 
 test("self-cancel credits wallet pro-rata and hands slot to expiry path", async () => {
