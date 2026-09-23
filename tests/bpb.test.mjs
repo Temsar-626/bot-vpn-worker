@@ -355,3 +355,28 @@ test("v1 sealed data still decrypts when VAULT_KEY is configured", async () => {
   assert.equal(sealed.version, 1);
   assert.deepEqual(await unseal(env, sealed), { token: "V1_SECRET" });
 });
+
+test("sold slots need force to delete; lost-key rows are still removable", async () => {
+  const store = await import("../src/services/bpb/store.js");
+  const keyedEnv = { BOT_KV: new MemoryKV(), VAULT_KEY: "test-vault-key-32-characters-long-xyz" };
+  const row = await createBpbAccount(keyedEnv, { label: "stuck", apiToken: "CF_TOKEN_LOSTKEY_123456" });
+  await store.updateBpbAccount(keyedEnv, row.id, { status: "sold", sold_user_id: "42", expire_at: 9999999999 });
+  // Normal delete is blocked for sold slots.
+  await assert.rejects(store.deleteBpbAccount(keyedEnv, row.id), /bpb_slot_sold/);
+  // Simulate losing VAULT_KEY: token unreadable, but force delete still works.
+  const plainEnv = { BOT_KV: keyedEnv.BOT_KV };
+  await assert.rejects(store.getBpbToken(plainEnv, await store.getBpbAccount(plainEnv, row.id)), /vault_decryption_failed/);
+  assert.equal(await store.deleteBpbAccount(plainEnv, row.id, { force: true }), true);
+  assert.equal(await store.getBpbAccount(plainEnv, row.id), null);
+});
+
+test("re-entering the token recovers a lost-key account", async () => {
+  const store = await import("../src/services/bpb/store.js");
+  const kv = new MemoryKV();
+  const keyedEnv = { BOT_KV: kv, VAULT_KEY: "test-vault-key-32-characters-long-xyz" };
+  const row = await createBpbAccount(keyedEnv, { label: "recover", apiToken: "CF_TOKEN_OLD_1234567890" });
+  const plainEnv = { BOT_KV: kv };
+  await assert.rejects(store.getBpbToken(plainEnv, row), /vault_decryption_failed/);
+  await store.setBpbToken(plainEnv, row.id, "CF_TOKEN_NEW_1234567890");
+  assert.equal(await store.getBpbToken(plainEnv, await store.getBpbAccount(plainEnv, row.id)), "CF_TOKEN_NEW_1234567890");
+});

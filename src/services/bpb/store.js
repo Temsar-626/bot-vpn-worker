@@ -128,10 +128,12 @@ export async function setBpbToken(env, accountId, apiToken) {
   return row;
 }
 
-export async function deleteBpbAccount(env, accountId) {
+export async function deleteBpbAccount(env, accountId, { force = false } = {}) {
   const row = await getBpbAccount(env, accountId);
   assert(row, "bpb_account_not_found", 404);
-  assert(row.status !== "sold", "bpb_slot_sold");
+  // Sold slots are protected (a buyer owns the link); force is the explicit
+  // admin override for test rows or dead slots (e.g. undecryptable token).
+  assert(force || row.status !== "sold", "bpb_slot_sold");
   await env.BOT_KV.delete(key(TYPE, accountId));
   return true;
 }

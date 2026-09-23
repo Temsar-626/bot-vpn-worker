@@ -138,14 +138,17 @@ admin.put("/accounts/:id", async (c) => {
 admin.delete("/accounts/:id", async (c) => {
   const row = await getBpbAccount(c.env, c.req.param("id"));
   assert(row, "bpb_account_not_found", 404);
-  // Best-effort remote cleanup; row deletion still proceeds if CF is unreachable.
+  const b = await body(c);
+  const force = b.force === true;
+  // Best-effort remote cleanup; row deletion still proceeds if CF is
+  // unreachable or the stored token is undecryptable (lost VAULT_KEY).
   if (row.cf_account_id && row.worker_name) {
     try {
       const token = await getBpbToken(c.env, row);
       await deleteWorker(token, row.cf_account_id, row.worker_name);
     } catch {}
   }
-  await deleteBpbAccount(c.env, row.id);
+  await deleteBpbAccount(c.env, row.id, { force });
   return result(c, {});
 });
 
@@ -163,6 +166,7 @@ admin.post("/assign-preview", async (c) => {
     sold_order_id: "",
     sold_service_id: "",
     sold_user_id: "",
+    sold_at: 0,
     expire_at: 0,
   });
   return result(c, { subUrl: out.subUrl, panelUrl: out.panelUrl, expireAt: out.expireAt });

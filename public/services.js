@@ -1901,7 +1901,7 @@ async function svBpb() {
     svBtn(t("save"), "bpbDefaultsSave", "", true),
   );
   const head = `<div class="v-grid v-stagger">${[["free", c.free || 0, L("اسلات آزاد", "Free slots")], ["sold", c.sold || 0, L("فروخته‌شده", "Sold")], ["error", c.error || 0, L("خطا", "Errors")]].map(([k, n, l]) => `<div class="${CLS.card} p-5"><strong class="block text-2xl">${fmtNum(n)}</strong><span class="v-meta">${l}</span></div>`).join("")}</div>`;
-  const rows = d.rows.length ? d.rows.map((r) => `<div class="v-row"><span class="v-icon">${vIcon("cloud")}</span><div class="v-row-main"><p class="text-sm font-bold">${esc(r.label)} ${bpbBadge(r.status)}</p><p class="v-meta">${esc(r.cf_email || "")} · ${esc(r.worker_name || "")}${r.panel_url ? `<br><span class="v-code" dir="ltr">${esc(r.panel_url)}</span>` : ""}${r.status === "sold" && r.expire_at ? `<br>${L("انقضا", "Expires")}: ${fmtDate(r.expire_at * 1000)}` : ""}${r.last_error ? `<br><span class="text-rose-400">${esc(r.last_error)}</span>` : ""}</p></div><div class="v-actions">${["pending_install", "error"].includes(r.status) ? svBtn(L("نصب", "Install"), "bpbInstall", `data-id="${r.id}"`) : ""}${r.status === "sold" ? svBtn(L("قطع دسترسی", "Revoke"), "bpbRevoke", `data-id="${r.id}"`) : ""}${r.status !== "sold" ? svBtn(L("حذف", "Delete"), "bpbDelete", `data-id="${r.id}"`) : ""}${r.panel_url ? svBtn(L("تنظیمات", "Settings"), "bpbSettings", `data-id="${r.id}"`) : ""}${r.hasPanelPass ? svBtn(L("پسورد پنل", "Panel password"), "bpbPanelPass", `data-id="${r.id}"`) : ""}${svBtn(L("توکن", "Token"), "bpbToken", `data-id="${r.id}"`)}</div></div>`).join("") : vEmpty(L("اولین اکانت Cloudflare را با API Token اضافه کنید. هر اکانت = یک Worker.", "Add your first Cloudflare account with an API token. One account = one Worker."), "cloud");
+  const rows = d.rows.length ? d.rows.map((r) => `<div class="v-row"><span class="v-icon">${vIcon("cloud")}</span><div class="v-row-main"><p class="text-sm font-bold">${esc(r.label)} ${bpbBadge(r.status)}</p><p class="v-meta">${esc(r.cf_email || "")} · ${esc(r.worker_name || "")}${r.panel_url ? `<br><span class="v-code" dir="ltr">${esc(r.panel_url)}</span>` : ""}${r.status === "sold" && r.expire_at ? `<br>${L("انقضا", "Expires")}: ${fmtDate(r.expire_at * 1000)}` : ""}${r.last_error ? `<br><span class="text-rose-400">${esc(r.last_error)}</span>` : ""}</p></div><div class="v-actions">${["pending_install", "error"].includes(r.status) ? svBtn(L("نصب", "Install"), "bpbInstall", `data-id="${r.id}"`) : ""}${r.status === "sold" ? svBtn(L("قطع دسترسی", "Revoke"), "bpbRevoke", `data-id="${r.id}"`) : ""}${svBtn(L("حذف", "Delete"), "bpbDelete", `data-id="${r.id}"`)}${r.panel_url ? svBtn(L("تنظیمات", "Settings"), "bpbSettings", `data-id="${r.id}"`) : ""}${r.hasPanelPass ? svBtn(L("پسورد پنل", "Panel password"), "bpbPanelPass", `data-id="${r.id}"`) : ""}${svBtn(L("توکن", "Token"), "bpbToken", `data-id="${r.id}"`)}${svBtn(L("تعویض توکن", "Replace token"), "bpbTokenReplace", `data-id="${r.id}"`)}</div></div>`).join("") : vEmpty(L("اولین اکانت Cloudflare را با API Token اضافه کنید. هر اکانت = یک Worker.", "Add your first Cloudflare account with an API token. One account = one Worker."), "cloud");
   return svRows(head + defaultsCard + vSection(L("اکانت‌های Cloudflare / اسلات‌های BPB", "Cloudflare accounts / BPB slots"), rows, svBtn(L("اکانت جدید", "New account"), "bpbNew", "", true) + svBtn(L("تنظیمات گروهی", "Bulk settings"), "bpbBulk")) + vNote(L("برای فروش، یک پنل از نوع BPB بسازید و پلن را به آن وصل کنید؛ خرید، اسلات آزاد را می‌گیرد. توکن‌ها plaintext ذخیره می‌شوند — دسترسی ادمین را محدود نگه دارید.", "To sell, create a BPB-type provider and attach plans to it; purchases consume a free slot. Tokens are stored in plaintext — keep admin access restricted."), true));
 }
 ACTIONS.bpbNew = () => vModal(L("اکانت Cloudflare جدید", "New Cloudflare account"), vField("bpb-label", L("نام نمایشی", "Label"), "", 'required maxlength="100"') + vField("bpb-token", L("API Token کلادفلر", "Cloudflare API token"), "", 'type="password" required dir="ltr" autocomplete="new-password"') + vNote(L("دسترسی پیشنهادی: Edit Workers + خواندن Account Settings + KV.", "Suggested scope: edit Workers, read account settings, KV.")), "bpbSave");
@@ -1928,8 +1928,19 @@ ACTIONS.bpbRevoke = async (d, el) => {
   catch (e) { toast(vError(e.message), "error"); } finally { el.disabled = false; }
 };
 ACTIONS.bpbDelete = async (d) => {
-  if (!(await confirmDlg(L("این اکانت حذف شود؟ (ورکر هم در صورت امکان پاک می‌شود)", "Delete this account? (The worker is removed if reachable)"), t("remove")))) return;
-  await bpbAPI("/accounts/" + d.id, { method: "DELETE" }); SV.html = {}; svRefresh();
+  const r = (SV.cache.bpb || []).find((x) => x.id === d.id);
+  const sold = r?.status === "sold";
+  if (!(await confirmDlg(sold ? L("این اسلات فروخته‌شده حذف شود؟ لینک خریدار می‌میرد و مبلغ برنمی‌گردد. فقط برای ردیف تستی/خراب استفاده کنید.", "Delete this SOLD slot? The buyer link dies with no refund. Only for test/broken rows.") : L("این اکانت حذف شود؟ (ورکر هم در صورت امکان پاک می‌شود)", "Delete this account? (The worker is removed if reachable)"), t("remove")))) return;
+  await bpbAPI("/accounts/" + d.id, { method: "DELETE", body: sold ? { force: true } : {} });
+  SV.html = {}; svRefresh();
+};
+ACTIONS.bpbTokenReplace = (d) => {
+  SV.edit = { id: d.id };
+  vModal(L("تعویض توکن Cloudflare", "Replace Cloudflare token"), vField("bpb-new-token", L("API Token جدید", "New API token"), "", 'type="password" required dir="ltr" autocomplete="new-password"') + vNote(L("توکن قبلی (حتی اگر با VAULT_KEY قدیمی قفل شده باشد) جایگزین می‌شود و اکانت دوباره قابل مدیریت می‌شود.", "Replaces the previous token — even one locked by a lost VAULT_KEY — and makes the account manageable again.")), "bpbTokenReplaceSave");
+};
+ACTIONS.bpbTokenReplaceSave = async () => {
+  await bpbAPI("/accounts/" + SV.edit.id + "/token", { method: "POST", body: { apiToken: vVal("bpb-new-token") } });
+  closeModal(); toast(t("saved"), "success"); SV.html = {}; svRefresh();
 };
 ACTIONS.bpbToken = async (d) => {
   const r = await bpbAPI("/accounts/" + d.id + "/token");
