@@ -432,9 +432,11 @@ export async function serviceCallback(env, user, lang, data) {
   else if (act === "service") await showService(env, user, lang, value);
   else if (act === "content") {
     const v = await serviceContent(env, user.id, value);
-    const parts = [v.proxyUrl || v.subscriptionUrl, ...v.configs].filter(
-      Boolean,
-    );
+    const parts = [
+      ...new Set(
+        [v.proxyUrl || v.subscriptionUrl, ...v.configs].filter(Boolean),
+      ),
+    ];
     for (const item of parts) {
       for (let i = 0; i < item.length; i += 3800)
         await say(env, user, item.slice(i, i + 3800));

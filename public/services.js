@@ -1894,7 +1894,7 @@ async function svBpb() {
   SV.cache.bpb = d.rows;
   const c = d.counts || {};
   const head = `<div class="v-grid v-stagger">${[["free", c.free || 0, L("اسلات آزاد", "Free slots")], ["sold", c.sold || 0, L("فروخته‌شده", "Sold")], ["error", c.error || 0, L("خطا", "Errors")]].map(([k, n, l]) => `<div class="${CLS.card} p-5"><strong class="block text-2xl">${fmtNum(n)}</strong><span class="v-meta">${l}</span></div>`).join("")}</div>`;
-  const rows = d.rows.length ? d.rows.map((r) => `<div class="v-row"><span class="v-icon">${vIcon("cloud")}</span><div class="v-row-main"><p class="text-sm font-bold">${esc(r.label)} ${bpbBadge(r.status)}</p><p class="v-meta">${esc(r.cf_email || "")} · ${esc(r.worker_name || "")}${r.panel_url ? `<br><span class="v-code" dir="ltr">${esc(r.panel_url)}</span>` : ""}${r.status === "sold" && r.expire_at ? `<br>${L("انقضا", "Expires")}: ${fmtDate(r.expire_at * 1000)}` : ""}${r.last_error ? `<br><span class="text-rose-400">${esc(r.last_error)}</span>` : ""}</p></div><div class="v-actions">${["pending_install", "error"].includes(r.status) ? svBtn(L("نصب", "Install"), "bpbInstall", `data-id="${r.id}"`) : ""}${r.status === "sold" ? svBtn(L("قطع دسترسی", "Revoke"), "bpbRevoke", `data-id="${r.id}"`) : ""}${r.status !== "sold" ? svBtn(L("حذف", "Delete"), "bpbDelete", `data-id="${r.id}"`) : ""}${r.panel_url ? svBtn(L("تنظیمات", "Settings"), "bpbSettings", `data-id="${r.id}"`) : ""}</div></div>`).join("") : vEmpty(L("اولین اکانت Cloudflare را با API Token اضافه کنید. هر اکانت = یک Worker.", "Add your first Cloudflare account with an API token. One account = one Worker."), "cloud");
+  const rows = d.rows.length ? d.rows.map((r) => `<div class="v-row"><span class="v-icon">${vIcon("cloud")}</span><div class="v-row-main"><p class="text-sm font-bold">${esc(r.label)} ${bpbBadge(r.status)}</p><p class="v-meta">${esc(r.cf_email || "")} · ${esc(r.worker_name || "")}${r.panel_url ? `<br><span class="v-code" dir="ltr">${esc(r.panel_url)}</span>` : ""}${r.status === "sold" && r.expire_at ? `<br>${L("انقضا", "Expires")}: ${fmtDate(r.expire_at * 1000)}` : ""}${r.last_error ? `<br><span class="text-rose-400">${esc(r.last_error)}</span>` : ""}</p></div><div class="v-actions">${["pending_install", "error"].includes(r.status) ? svBtn(L("نصب", "Install"), "bpbInstall", `data-id="${r.id}"`) : ""}${r.status === "sold" ? svBtn(L("قطع دسترسی", "Revoke"), "bpbRevoke", `data-id="${r.id}"`) : ""}${r.status !== "sold" ? svBtn(L("حذف", "Delete"), "bpbDelete", `data-id="${r.id}"`) : ""}${r.panel_url ? svBtn(L("تنظیمات", "Settings"), "bpbSettings", `data-id="${r.id}"`) : ""}${svBtn(L("توکن", "Token"), "bpbToken", `data-id="${r.id}"`)}</div></div>`).join("") : vEmpty(L("اولین اکانت Cloudflare را با API Token اضافه کنید. هر اکانت = یک Worker.", "Add your first Cloudflare account with an API token. One account = one Worker."), "cloud");
   return svRows(head + vSection(L("اکانت‌های Cloudflare / اسلات‌های BPB", "Cloudflare accounts / BPB slots"), rows, svBtn(L("اکانت جدید", "New account"), "bpbNew", "", true) + svBtn(L("تنظیمات گروهی", "Bulk settings"), "bpbBulk")) + vNote(L("توکن CF با VAULT_KEY رمز می‌شود و هرگز برنمی‌گردد. برای فروش، یک پنل از نوع BPB بسازید و پلن را به آن وصل کنید؛ خرید، اسلات آزاد را می‌گیرد.", "CF tokens are sealed with VAULT_KEY and never returned. To sell, create a BPB-type provider and attach plans to it; purchases consume a free slot."), true));
 }
 ACTIONS.bpbNew = () => vModal(L("اکانت Cloudflare جدید", "New Cloudflare account"), vField("bpb-label", L("نام نمایشی", "Label"), "", 'required maxlength="100"') + vField("bpb-token", L("API Token کلادفلر", "Cloudflare API token"), "", 'type="password" required dir="ltr" autocomplete="new-password"') + vNote(L("دسترسی پیشنهادی: Edit Workers + خواندن Account Settings + KV. توکن فقط رمزنگاری‌شده ذخیره می‌شود.", "Suggested scope: edit Workers, read account settings, KV. The token is stored sealed only.")), "bpbSave");
@@ -1916,6 +1916,16 @@ ACTIONS.bpbRevoke = async (d, el) => {
 ACTIONS.bpbDelete = async (d) => {
   if (!(await confirmDlg(L("این اکانت حذف شود؟ (ورکر هم در صورت امکان پاک می‌شود)", "Delete this account? (The worker is removed if reachable)"), t("remove")))) return;
   await bpbAPI("/accounts/" + d.id, { method: "DELETE" }); SV.html = {}; svRefresh();
+};
+ACTIONS.bpbToken = async (d) => {
+  const r = await bpbAPI("/accounts/" + d.id + "/token");
+  openModal(
+    `<div class="p-6"><h3 class="font-bold mb-4">${L("توکن Cloudflare", "Cloudflare token")}</h3><textarea readonly dir="ltr" rows="3" class="${CLS.input}">${esc(r.token)}</textarea><p class="v-meta mt-2">${L("این توکن را با کسی به اشتراک نگذارید.", "Do not share this token with anyone.")}</p><div class="mt-4 flex gap-2">${svBtn(t("copy"), "bpbCopyToken", `data-token="${esc(r.token)}"`)}${svBtn(t("close"), "modalClose")}</div></div>`,
+  );
+};
+ACTIONS.bpbCopyToken = async (d) => {
+  try { await navigator.clipboard.writeText(d.token); toast(t("copied"), "success"); }
+  catch { toast(t("errorGeneric"), "error"); }
 };
 ACTIONS.bpbSettings = (d) => {
   const r = (SV.cache.bpb || []).find((x) => x.id === d.id) || { settings: {} };

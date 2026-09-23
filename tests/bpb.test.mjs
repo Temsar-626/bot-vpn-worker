@@ -168,3 +168,40 @@ test("settings sanitizer rejects unsafe values", () => {
   assert.deepEqual(clean.proxyIPs, ["1.1.1.1", "2.2.2.2"]);
   assert.equal(clean.unknownFutureKey, undefined);
 });
+
+test("admin token reveal returns raw token while list stays masked", async () => {
+  const { setup } = await import("./helpers.mjs");
+  const h = await setup();
+  h.env.VAULT_KEY = "test-encryption-key-32-characters-long";
+  const { createBpbAccount: create } = await import("../src/services/bpb/store.js");
+  const row = await create(h.env, { label: "reveal-1", apiToken: "CF_REVEAL_TOKEN_1234567890" });
+  const got = await h.api("GET", "/bpb/accounts/" + row.id);
+  assert.equal(got.ok, true);
+  assert(!JSON.stringify(got.data).includes("CF_REVEAL_TOKEN_1234567890"));
+  const revealed = await h.api("GET", "/bpb/accounts/" + row.id + "/token");
+  assert.equal(revealed.ok, true);
+  assert.equal(revealed.data.token, "CF_REVEAL_TOKEN_1234567890");
+  // Unauthorized callers get 401.
+  const anon = await h.raw("GET", "/api/bpb/accounts/" + row.id + "/token");
+  assert.equal(anon.status, 401);
+});
+
+test("bpb services expose only the direct link (no proxyUrl)", async () => {
+  const { MemoryKV: KV } = await import("./helpers.mjs");
+  const e2 = { BOT_KV: new KV(), VAULT_KEY: "test-encryption-key-32-characters-long", PUBLIC_BASE_URL: "https://panel.example.com" };
+  const { savePanel } = await import("../src/services/providers.js");
+  const { put } = await import("../src/services/common.js");
+  const { serviceContent } = await import("../src/services/engine.js");
+  const pool = await savePanel(e2, { title: "BPB pool", type: "bpb" });
+  const sub = "https://w1.shop-sub.workers.dev/SECUREPATH/sub";
+  await put(e2, "service", "svc1", { id: "svc1", userId: "42", panelId: pool.id, configs: [sub], subscriptionUrl: sub, ownerToken: "a".repeat(64) });
+  const v = await serviceContent(e2, 42, "svc1");
+  assert.equal(v.proxyUrl, "");
+  assert.equal(v.subscriptionUrl, sub);
+  assert.deepEqual(v.configs, [sub]);
+  // Non-BPB panels keep the proxy link.
+  const classic = await savePanel(e2, { title: "m", type: "marzban", url: "https://provider.example.org", secret: { token: "k" } });
+  await put(e2, "service", "svc2", { id: "svc2", userId: "42", panelId: classic.id, configs: ["vless://x"], subscriptionUrl: "", ownerToken: "b".repeat(64) });
+  const v2 = await serviceContent(e2, 42, "svc2");
+  assert(v2.proxyUrl.includes("/sub/"));
+});

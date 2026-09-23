@@ -1123,12 +1123,20 @@ export async function serviceContent(env, userId, serviceId) {
     (await getSettings(env)).publicBaseUrl ||
     env.PUBLIC_BASE_URL ||
     "";
+  // BPB buyers get only the direct worker link (admin choice); the shared
+  // /sub proxy is hidden for BPB services.
+  const panel = await get(env, "panel", s.panelId);
   return {
     configs: s.configs || [],
     subscriptionUrl: /^https:\/\//.test(s.subscriptionUrl || "")
       ? s.subscriptionUrl
       : "",
-    proxyUrl: base ? base.replace(/\/$/, "") + "/sub/" + s.ownerToken : "",
+    proxyUrl:
+      panel?.type === "bpb"
+        ? ""
+        : base
+          ? base.replace(/\/$/, "") + "/sub/" + s.ownerToken
+          : "",
     username: s.username,
   };
 }

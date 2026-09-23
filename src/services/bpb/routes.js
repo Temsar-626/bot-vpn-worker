@@ -68,6 +68,14 @@ admin.post("/accounts/:id/token", async (c) => {
   return result(c, { account: publicBpbAccount(row) });
 });
 
+// Reveal the raw CF token on demand (admin-only). The list endpoints stay
+// masked; call this only when the admin explicitly asks to see it.
+admin.get("/accounts/:id/token", async (c) => {
+  const row = await getBpbAccount(c.env, c.req.param("id"));
+  assert(row, "bpb_account_not_found", 404);
+  return result(c, { token: await getBpbToken(c.env, row) });
+});
+
 admin.put("/accounts/:id/settings", async (c) => {
   const b = await body(c);
   // Settings-only update redeploys with merged settings (sold slots need explicit allow).
