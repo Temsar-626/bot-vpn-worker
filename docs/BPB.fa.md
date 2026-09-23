@@ -75,8 +75,10 @@ securePath + UUID ولیس / پسورد Trojan و redeploy** باطل می‌ک�
 
 ## لینک تحویلی به خریدار
 
-برای سرویس‌های BPB فقط **لینک مستقیم ورکر** (`https://{worker}.{sub}/{securePath}/sub`)
-به خریدار داده می‌شود؛ لینک پروکسی `/sub` روی دامین خودمان برای BPB مخفی است
+برای سرویس‌های BPB فقط **لینک مستقیم ورکر** داده می‌شود (تأییدشده با روتر رسمی `worker.js`؛ مسیر bare یعنی `.../sub` به 404 می‌خورد):
+- اصلی (v2rayNG/v2rayN): `https://{worker}.{sub}/{securePath}/sub/normal/xray?app=xray`
+- کلش: `.../sub/normal/clash?app=clash` — سینگ‌باکس: `.../sub/normal/sing-box?app=sing-box`
+لینک پروکسی `/sub` روی دامین خودمان برای BPB مخفی است
 (پیام‌های تکراری هم حذف می‌شوند).
 
 ## عیب‌یابی

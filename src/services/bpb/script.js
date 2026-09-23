@@ -174,12 +174,29 @@ export function sanitizeBpbSettings(input) {
   return out;
 }
 
-/** Sub links handed to the buyer (FA/EN message uses these). */
+/** Sub links handed to the buyer (FA/EN message uses these).
+ * Verified against the official worker.js router: bare `.../sub` 404s.
+ * Valid shape is `/{securePath}/sub/{format}?app={client}` where format is
+ * one of normal|raw|fragment|warp|warp-pro and client matches ?app=.
+ * xray covers v2rayNG/v2rayN/Nekoray, clash covers Mihomo, sing-box covers SFA.
+ */
 export function buildSubLinks({ workerName, subdomain, securePath }) {
   const base = `https://${workerName}.${subdomain}/${securePath}`;
+  const xray = `${base}/sub/normal/xray?app=xray`;
+  const clash = `${base}/sub/normal/clash?app=clash`;
+  const singbox = `${base}/sub/normal/sing-box?app=sing-box`;
   return {
     panelUrl: `${base}/panel`,
-    subUrl: `${base}/sub`,
-    links: [`${base}/sub`],
+    subUrl: xray,
+    links: [xray, clash, singbox],
   };
+}
+
+/** Same links derived from a stored bpb_accounts row. */
+export function slotSubLinks(slot) {
+  return buildSubLinks({
+    workerName: slot.worker_name,
+    subdomain: slot.workers_dev_subdomain,
+    securePath: slot.secure_path,
+  });
 }

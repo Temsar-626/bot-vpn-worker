@@ -24,6 +24,7 @@ import {
 import { serviceSettings } from "./settings.js";
 import { PROVIDERS, connector, prepareAccount } from "./providers.js";
 import { assignBpbSlot, findBpbSlotForService, proRataRefund } from "./bpb/service.js";
+import { slotSubLinks } from "./bpb/script.js";
 import {
   getBpbAccount,
   listBpbAccounts,
@@ -732,10 +733,10 @@ async function processBpbOperation(env, o, panel) {
       const existing = (await listBpbAccounts(env)).find(
         (s) => s.sold_order_id === o.id && (s.sold_service_id === serviceId || !s.sold_service_id),
       );
-      let slot, subUrl, expireAt;
+      let slot, links, expireAt;
       if (existing && existing.status === "sold") {
         slot = existing;
-        subUrl = `https://${slot.worker_name}.${slot.workers_dev_subdomain}/${slot.secure_path}/sub`;
+        links = slotSubLinks(slot);
         expireAt = slot.expire_at;
         if (!slot.sold_service_id) {
           await updateBpbAccount(env, slot.id, { sold_service_id: serviceId });
@@ -749,7 +750,7 @@ async function processBpbOperation(env, o, panel) {
           durationDays: o.plan.days || 30,
         });
         slot = out.account;
-        subUrl = out.subUrl;
+        links = { subUrl: out.subUrl, links: out.links };
         expireAt = out.expireAt;
       }
       const a = o.accounts[i];
@@ -758,8 +759,8 @@ async function processBpbOperation(env, o, panel) {
       o.inFlightIndex = i;
       await put(env, "operation", o.id, o);
       o.results[i] = {
-        configs: [subUrl],
-        subscriptionUrl: subUrl,
+        configs: links.links,
+        subscriptionUrl: links.subUrl,
         dataLimit: a.dataLimit,
         usedBytes: 0,
         expiresAt: expireAt,
@@ -788,11 +789,11 @@ async function processBpbOperation(env, o, panel) {
   o.targetAccount = { ...svc.remoteAccount, bpbAccountId: slot.id, expiresAt: newExpire, operationId: o.id };
   await put(env, "operation", o.id, o);
   const updated = await updateBpbAccount(env, slot.id, { expire_at: newExpire });
-  const subUrl = `https://${updated.worker_name}.${updated.workers_dev_subdomain}/${updated.secure_path}/sub`;
+  const links = slotSubLinks(updated);
   o.results = [
     {
-      configs: [subUrl],
-      subscriptionUrl: subUrl,
+      configs: links.links,
+      subscriptionUrl: links.subUrl,
       dataLimit: svc.dataLimit,
       usedBytes: svc.usedBytes || 0,
       expiresAt: newExpire,
@@ -977,11 +978,11 @@ async function reconcileBpbOperation(env, o) {
   if (o.serviceId) {
     const slot = (await listBpbAccounts(env)).find((s) => s.sold_service_id === o.serviceId);
     assert(slot && slot.status === "sold", "remote_creation_not_confirmed");
-    const subUrl = `https://${slot.worker_name}.${slot.workers_dev_subdomain}/${slot.secure_path}/sub`;
+    const links = slotSubLinks(slot);
     o.results = [
       {
-        configs: [subUrl],
-        subscriptionUrl: subUrl,
+        configs: links.links,
+        subscriptionUrl: links.subUrl,
         dataLimit: o.desired?.dataLimit ?? 0,
         usedBytes: 0,
         expiresAt: slot.expire_at,
@@ -996,10 +997,10 @@ async function reconcileBpbOperation(env, o) {
         (s) => s.sold_order_id === o.id && s.sold_service_id === serviceId && s.status === "sold",
       );
       assert(slot, "remote_creation_not_confirmed");
-      const subUrl = `https://${slot.worker_name}.${slot.workers_dev_subdomain}/${slot.secure_path}/sub`;
+      const links = slotSubLinks(slot);
       o.results[i] = {
-        configs: [subUrl],
-        subscriptionUrl: subUrl,
+        configs: links.links,
+        subscriptionUrl: links.subUrl,
         dataLimit: o.accounts[i].dataLimit,
         usedBytes: 0,
         expiresAt: slot.expire_at,
@@ -1199,15 +1200,15 @@ async function synchronizeBpb(env, s) {
     ? await getBpbAccount(env, slotId)
     : (await listBpbAccounts(env)).find((r) => r.sold_service_id === s.id);
   assert(slot, "remote_service_missing", 404);
-  const subUrl = `https://${slot.worker_name}.${slot.workers_dev_subdomain}/${slot.secure_path}/sub`;
+  const links = slotSubLinks(slot);
   const expired = slot.status !== "sold" || (slot.expire_at && slot.expire_at <= epoch());
   Object.assign(s, {
     usedBytes: s.usedBytes || 0,
     expiresAt: slot.expire_at || s.expiresAt,
     status: expired ? "expired" : slot.status === "sold" ? "active" : s.status,
     remote: { bpbAccountId: slot.id, panelUrl: slot.panel_url },
-    subscriptionUrl: subUrl,
-    configs: [subUrl],
+    subscriptionUrl: links.subUrl,
+    configs: links.links,
     lastSyncAt: Date.now(),
     lastSyncError: "",
   });

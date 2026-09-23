@@ -279,3 +279,16 @@ test("catalogue exposes live stock for bpb plans", async () => {
   assert.equal(plans.length, 1);
   assert.equal(plans[0].stockLeft, 1);
 });
+
+test("sub links match the official BPB router (no bare /sub)", async () => {
+  const { buildSubLinks, slotSubLinks } = await import("../src/services/bpb/script.js");
+  const out = buildSubLinks({ workerName: "w1", subdomain: "s.workers.dev", securePath: "SECURE123" });
+  assert.equal(out.subUrl, "https://w1.s.workers.dev/SECURE123/sub/normal/xray?app=xray");
+  assert.deepEqual(out.links, [
+    "https://w1.s.workers.dev/SECURE123/sub/normal/xray?app=xray",
+    "https://w1.s.workers.dev/SECURE123/sub/normal/clash?app=clash",
+    "https://w1.s.workers.dev/SECURE123/sub/normal/sing-box?app=sing-box",
+  ]);
+  const fromRow = slotSubLinks({ worker_name: "w1", workers_dev_subdomain: "s.workers.dev", secure_path: "SECURE123" });
+  assert.equal(fromRow.subUrl, out.subUrl);
+});
