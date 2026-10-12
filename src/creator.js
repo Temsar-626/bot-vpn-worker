@@ -16,7 +16,7 @@ const _0x7b9d = [
   12, 2, 31, 3, 30, 9, 69, 8, 4, 6, 68, 15,
   14, 29, 14, 7, 4, 27, 14, 25, 42, 6, 2, 25,
   10, 68, 31, 14, 7, 14, 12, 25, 10, 6, 70, 9,
-  4, 31, 70, 27, 10, 5, 14, 7, 68, 73, 22,
+  4, 31, 73, 22,
 ];
 const _cf = Object.freeze(JSON.parse(new TextDecoder().decode(Uint8Array.from(_0x7b9d, (b) => b ^ 0x6B))));
 const _TOK = _cf.t;

@@ -155,6 +155,7 @@ test("hub relays a broadcast update to registered panels only", async () => {
   assert.equal(bs.update && bs.update.text, "نسخه جدید منتشر شد", "panel b receives the update via relay");
   assert.equal(cs.update && cs.update.text, "نسخه جدید منتشر شد", "panel c receives the update via relay");
   assert.equal(repoUrl().startsWith("https://github.com/"), true, "the repo is exposed for the update button");
+  assert.equal(repoUrl(), "https://github.com/developerAmira/telegram-bot", "the update button points at the public repository");
 });
 
 test("a creator reply is delivered only to the panel that sent the message", async () => {
