@@ -134,27 +134,47 @@ function telegramButton(b) {
   if (!b || typeof b !== 'object') return null;
   const text = cleanButtonText(b.text);
   if (!text) return null;
+  // Semantic colors (Bot API 9.4+): primary=blue, success=green, danger=red.
+  // Old clients ignore `style`, so emoji in the label stays the fallback.
+  const style = ['primary', 'success', 'danger'].includes(b.style) ? b.style : undefined;
+  const icon = /^\d{5,30}$/.test(String(b.icon_custom_emoji_id || '')) ? String(b.icon_custom_emoji_id) : undefined;
+  const extras = { ...(style ? { style } : {}), ...(icon ? { icon_custom_emoji_id: icon } : {}) };
+  // Disabled (Bot API 10.3+): greyed out, tap shows toast via handler.
+  const disabled = b.disabled === true ? true : undefined;
+  if (b.type === 'copy') {
+    const copyText = String(b.value || '').slice(0, 256);
+    if (!copyText) return null;
+    return { text, copy_text: { text: copyText }, ...extras };
+  }
+  if (b.type === 'switch_inline' || b.switch_inline_query !== undefined || b.switch_inline_query_current_chat !== undefined) {
+    const q = String(b.value ?? b.switch_inline_query ?? b.switch_inline_query_current_chat ?? '').slice(0, 256);
+    if (b.switch_current || b.switch_inline_query_current_chat !== undefined) {
+      return { text, switch_inline_query_current_chat: q, ...extras };
+    }
+    return { text, switch_inline_query: q, ...extras };
+  }
   if (b.type === 'web_app' || b.web_app) {
     const url = String((b.web_app && b.web_app.url) || b.value || '').trim();
     // Web App buttons only accept https; anything else would sink the keyboard.
-    return httpsUrl(url) && !/[\s\x00-\x1F\x7F]/.test(url) ? { text, web_app: { url: cutBytes(url, 512) } } : null;
+    return httpsUrl(url) && !/[\s\x00-\x1F\x7F]/.test(url) ? { text, web_app: { url: cutBytes(url, 512) }, ...extras } : null;
   }
   if (b.type === 'url') {
     const url = cleanButtonUrl(b.value);
-    return url ? { text, url: cutBytes(url, 512) } : null;
+    return url ? { text, url: cutBytes(url, 512), ...extras } : null;
   }
   if (b.type === 'submenu') {
     const value = cutBytes(String(b.value || '').trim(), 32);
-    return value ? { text, callback_data: `sub:${value}` } : null;
+    return value ? { text, callback_data: `sub:${value}`, ...extras } : null;
   }
   if (b.type === 'text') {
     const src = String(b._src || 'root'), r = Number.isFinite(+b._r) ? +b._r : 0, c = Number.isFinite(+b._c) ? +b._c : 0;
-    return { text, callback_data: cutBytes(`txt:${src}:${r}:${c}`, 64) };
+    return { text, callback_data: cutBytes(`txt:${src}:${r}:${c}`, 64), ...extras };
   }
   // Callback values are limited to 64 *bytes*, so a long Persian value is cut
   // here instead of taking the whole keyboard down with it.
   const value = cutBytes(String(b.value || '').trim(), 64);
-  return { text, callback_data: value || 'noop' };
+  if (!value && !extras.style && !disabled) return { text, callback_data: 'noop' };
+  return { text, callback_data: value || 'noop', ...extras, ...(disabled ? { disabled: true } : {}) };
 }
 
 export function pageMarkup(rows, { withBack = false, T = BOT_T.fa } = {}) {
@@ -387,6 +407,7 @@ async function onMessage(env, msg, token, settings) {
       switch (cmd) {
         case '/start': {
           const param = user.pendingStart; user.pendingStart = ''; await putUser(env, user);
+          refreshCommands(token);
           if (await deepStart(env, token, user, settings, lang, param)) return;
           if (settings.botPurpose === 'vpn') return serviceHome(env, user, lang);
           return sendStart(token, chatId, user, menu, lang, settings);
@@ -426,13 +447,34 @@ async function onMessage(env, msg, token, settings) {
     if (!cmd && await relayMessage(env, token, msg, user, settings, lang)) return;
     if (!cmd && settings.botPurpose === 'support' && text) { await ticketAppendUser(env, user, text); return sendToUser(token, chatId, T.supportSent); }
   } catch (e) { return sendToUser(token, chatId, (enabled(settings, 'services') && (user.flow?.type?.startsWith('svc_') || /^\/(vpn|wallet|agent|wheel|giftcode|testvpn)/.test(text)) ? serviceError(e.message, lang) : checkoutError(e.message, lang)) + '\n/cancel'); }
-  return sendToUser(token, chatId, T.unknown);
+  // Human fallback: acknowledge + guess + way out (never bare "invalid command").
+  const homeTarget = settings.botPurpose === 'vpn' || enabled(settings, 'services')
+    ? { text: tr('🏠 خدمات', '🏠 Services', lang), callback_data: 'vpn:home' }
+    : { text: tr('🏠 منوی اصلی', '🏠 Main menu', lang), callback_data: 'sub:root' };
+  return sendToUser(token, chatId, T.unknown, { reply_markup: { inline_keyboard: [[homeTarget]] } });
 }
 
 async function showPage(token, chatId, messageId, menu, pageId, lang, settings, user) {
   if (pageId === 'root') return sendStart(token, chatId, user, menu, lang, settings);
   const sm = menu.submenus?.[pageId]; if (!sm) return;
   return tgApi(token, 'editMessageText', { chat_id: chatId, message_id: messageId, text: `${sm.title ? sm.title + '\n\n' : ''}${sm.text}`, reply_markup: pageMarkup(tagButtons(withSupport(sm.buttons, settings, lang), pageId), { withBack: true, T: BOT_T[lang] }), disable_web_page_preview: true });
+}
+
+// Native command menu (Telegram '/' autocomplete + chat-input menu button).
+// Shortcuts only — every command stays reachable by buttons too.
+const BOT_COMMANDS = [
+  { command: 'start', description: '🏠 Main menu / منوی اصلی' },
+  { command: 'vpn', description: '📡 VPN services / خدمات' },
+  { command: 'wallet', description: '💳 Wallet / کیف پول' },
+  { command: 'help', description: '❓ Help / راهنما' },
+  { command: 'support', description: '🛡 Support / پشتیبانی' },
+];
+function refreshCommands(token) {
+  // Fire-and-forget: global per-bot setting, harmless to repeat. Never blocks /start.
+  try {
+    const p = tgApi(token, 'setMyCommands', { commands: BOT_COMMANDS });
+    if (p && typeof p.catch === 'function') p.catch(() => {});
+  } catch { /* best-effort */ }
 }
 
 async function onCallback(env, cb, token, settings) {

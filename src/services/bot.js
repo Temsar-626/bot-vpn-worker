@@ -24,6 +24,7 @@ import {
 } from "./engine.js";
 import { bpbDailyEstimate } from "./bpb/service.js";
 import { createPayment, attachReceipt, paymentView } from "./payments.js";
+import { pageIndicator, progressBar } from "./ux.js";
 import {
   customerGate,
   portalTicket,
@@ -161,24 +162,51 @@ export function serviceError(code, lang = "fa") {
   return (
     map[code]?.[lang === "en" ? 1 : 0] ||
     tr(
-      "عملیات انجام نشد؛ از مینی‌اپ وضعیت را بررسی کنید یا با پشتیبانی تماس بگیرید.",
-      "Operation failed. Check the Mini App status or contact support.",
+      "عملیات انجام نشد؛ از 📡 سرویس‌های من وضعیت را ببینید یا با پشتیبانی تماس بگیرید.",
+      "Operation failed. Check 📡 My services or contact support.",
       lang,
     )
   );
+}
+function toTelegramButton(b) {
+  if (!b || typeof b !== 'object') return null;
+  const text = String(b.text || '').trim();
+  if (!text) return null;
+  const style = ['primary', 'success', 'danger'].includes(b.style) ? b.style : undefined;
+  const extras = { ...(style ? { style } : {}), ...(b.disabled === true ? { disabled: true } : {}) };
+  if (b.copy_text) return { text, copy_text: b.copy_text, ...extras };
+  if (b.type === 'copy') {
+    const copyText = String(b.value || '').slice(0, 256);
+    if (!copyText) return null;
+    return { text, copy_text: { text: copyText }, ...extras };
+  }
+  if (b.type === 'switch_inline' || b.switch_inline_query !== undefined || b.switch_inline_query_current_chat !== undefined) {
+    const q = String(b.value ?? b.switch_inline_query ?? b.switch_inline_query_current_chat ?? '').slice(0, 256);
+    if (b.switch_current || b.switch_inline_query_current_chat !== undefined) return { text, switch_inline_query_current_chat: q, ...extras };
+    return { text, switch_inline_query: q, ...extras };
+  }
+  if (b.web_app) return { text, web_app: b.web_app, ...extras };
+  if (b.url) return { text, url: b.url, ...extras };
+  if (b.callback_data) return { text, callback_data: b.callback_data, ...extras };
+  return null;
 }
 async function say(env, user, text, rows) {
   const token = await resolveToken(env),
     settings = await serviceSettings(env);
   const decorated = rows?.map((row) =>
-    row.map((b) => ({
-      ...b,
-      ...(settings.buttonStyle ? { style: settings.buttonStyle } : {}),
-      ...(settings.premiumEmojiId
-        ? { icon_custom_emoji_id: settings.premiumEmojiId }
-        : {}),
-    })),
-  );
+    row.map((b) => {
+      const base = toTelegramButton(b) || b;
+      return {
+        ...base,
+        // Per-button style wins; global buttonStyle is only a fallback for
+        // buttons without an explicit semantic color (old clients ignore it).
+        ...(!base.style && settings.buttonStyle ? { style: settings.buttonStyle } : {}),
+        ...(!base.icon_custom_emoji_id && settings.premiumEmojiId
+          ? { icon_custom_emoji_id: settings.premiumEmojiId }
+          : {}),
+      };
+    }).filter(Boolean),
+  ).filter((row) => row.length);
   let result = await sendToUser(token, user.id, text, {
     ...(rows ? { reply_markup: { inline_keyboard: decorated } } : {}),
     disable_web_page_preview: true,
@@ -188,39 +216,53 @@ async function say(env, user, text, rows) {
     result.error_code === 400 &&
     rows &&
     (settings.buttonStyle || settings.premiumEmojiId)
-  )
+  ) {
+    // Fallback for old clients: same buttons without style/emoji.
+    const plain = rows?.map((row) =>
+      row.map((b) => {
+        const base = toTelegramButton(b);
+        if (!base) return null;
+        const { style, icon_custom_emoji_id, disabled, ...rest } = base;
+        return rest;
+      }).filter(Boolean),
+    ).filter((row) => row.length);
     result = await sendToUser(token, user.id, text, {
-      reply_markup: { inline_keyboard: rows },
+      reply_markup: { inline_keyboard: plain },
       disable_web_page_preview: true,
     });
+  }
   return result;
 }
 export async function serviceHome(env, user, lang = "fa") {
   const a = await account(env, user.id),
     s = await serviceSettings(env);
+  const brand = lang === 'en' ? (s.brand.nameEn || s.brand.name) : s.brand.name;
+  // Dashboard hero: 1-line title + credit + 1-line hint (max 5 lines total).
+  const text =
+    `${brand}\n\n💰 ${tr("اعتبار قابل استفاده", "Available credit", lang)}: ${amount(available(a), lang)}` +
+    `\n${tr("خرید، تمدید و مدیریت سرویس از دکمه‌های زیر:", "Buy, renew and manage from the buttons below:", lang)}`;
   return say(
     env,
     user,
-    `${s.brand.name}\n\n💰 ${tr("اعتبار قابل استفاده", "Available credit", lang)}: ${amount(available(a), lang)}`,
+    text,
     [
       [
-        btn(tr("🛍 خرید سرویس", "🛍 Buy service", lang), "vpn:plans:0"),
+        { text: tr("🛍 خرید سرویس", "🛍 Buy service", lang), callback_data: "vpn:plans:0", style: "success" },
         btn(tr("📡 سرویس‌های من", "📡 My services", lang), "vpn:mine:0"),
       ],
       [
         btn(tr("💳 کیف پول", "💳 Wallet", lang), "vpn:wallet"),
-        btn(tr("🌐 مینی‌اپ", "🌐 Mini App", lang), "vpn:portal"),
+        btn(tr("🧪 تست سرویس", "🧪 Trial", lang), "vpn:trial"),
       ],
       [
-        btn(tr("🧪 تست سرویس", "🧪 Trial", lang), "vpn:trial"),
         btn(tr("🎁 کد هدیه", "🎁 Gift code", lang), "vpn:gift"),
+        btn(tr("🎡 گردونه", "🎡 Rewards", lang), "vpn:wheel"),
       ],
       [
         btn(
           tr("🤝 درخواست نمایندگی", "🤝 Reseller request", lang),
           "vpn:agent",
         ),
-        btn(tr("🎡 گردونه", "🎡 Rewards", lang), "vpn:wheel"),
         btn(tr("🎲 تاس رایگان", "🎲 Free dice", lang), "vpn:dice:" + id()),
       ],
     ],
@@ -259,9 +301,10 @@ async function requestPhone(env, user, lang) {
   await sendToUser(
     await resolveToken(env),
     user.id,
+    `📱 ${tr("تأیید شماره", "Verify phone", lang)} · ${tr("مرحله ۱/۱", "Step 1/1", lang)}\n` +
     tr(
-      "شماره خود را با دکمه زیر به اشتراک بگذارید. شماره تایپ‌شده تأیید محسوب نمی‌شود.",
-      "Share your own contact using the button. A typed number is not verified.",
+      "دکمه زیر را بزنید تا شماره خودتان ارسال شود. شماره تایپ‌شده قبول نیست.\n/cancel",
+      "Tap the button below to share your own contact. A typed number is not accepted.\n/cancel",
       lang,
     ),
     {
@@ -308,23 +351,45 @@ async function openPortal(env, user, lang) {
 }
 async function showPlans(env, user, lang, page = 0) {
   const plans = await catalogue(env, user.id);
-  const slice = plans.slice(page * 8, page * 8 + 8);
-  const rows = slice.map((p) => [
-    btn(
-      `${p.title.slice(0, 32)} · ${amount(p.price, lang)}${p.stockLeft !== undefined ? ` · ${tr("موجودی", "Stock", lang)}: ${p.stockLeft}` : ""}`,
-      `vpn:plan:${p.id}`,
-    ),
+  const per = 8, totalPages = Math.max(1, Math.ceil(plans.length / per));
+  const cur = Math.max(0, Math.min(page, totalPages - 1));
+  const slice = plans.slice(cur * per, cur * per + per);
+  const rows = slice.map((p) => {
+    const soldOut = p.stockLeft !== undefined && Number(p.stockLeft) <= 0;
+    const label = `${p.title.slice(0, 20)} · ${amount(p.price, lang)}`;
+    if (soldOut) {
+      return [{ text: `🔒 ${label}`, callback_data: `vpn:plan:${p.id}`, disabled: true }];
+    }
+    return [btn(label, `vpn:plan:${p.id}`)];
+  });
+  if (!plans.length) {
+    return say(
+      env,
+      user,
+      tr("هنوز پلنی در دسترس نیست.\nبه‌زودی پلن‌های جدید اضافه می‌شود.", "No plans are available yet.\nNew plans are coming soon.", lang),
+      [
+        [{ text: tr("🛡 پشتیبانی", "🛡 Support", lang), callback_data: "support:open" }],
+        [{ text: tr("🏠 خدمات", "🏠 Services", lang), callback_data: "vpn:home" }],
+      ],
+    );
+  }
+  // Pagination in ONE row: prev + ۱/۳ + next (not cryptic ‹ › alone).
+  if (totalPages > 1) {
+    const nav = [];
+    if (cur > 0) nav.push(btn("‹ " + tr("قبلی", "Prev", lang), "vpn:plans:" + (cur - 1)));
+    nav.push({ text: `📄 ${pageIndicator(cur, totalPages, lang)}`, callback_data: "vpn:noop" });
+    if (cur < totalPages - 1) nav.push(btn(tr("بعدی", "Next", lang) + " ›", "vpn:plans:" + (cur + 1)));
+    rows.push(nav);
+  }
+  rows.push([
+    btn(tr("◀ خدمات", "◀ Services", lang), "vpn:home"),
+    btn(tr("🏠 اصلی", "🏠 Home", lang), "vpn:home"),
   ]);
-  if (page > 0) rows.push([btn("‹", "vpn:plans:" + (page - 1))]);
-  if (plans.length > (page + 1) * 8)
-    rows.push([btn("›", "vpn:plans:" + (page + 1))]);
-  rows.push([btn(tr("⬅️ منوی خدمات", "⬅️ Services", lang), "vpn:home")]);
   return say(
     env,
     user,
-    plans.length
-      ? tr("پلن مورد نظر را انتخاب کنید:", "Choose a plan:", lang)
-      : tr("هنوز پلنی در دسترس نیست.", "No plans are available yet.", lang),
+    tr("پلن مورد نظر را انتخاب کنید:", "Choose a plan:", lang) +
+      (totalPages > 1 ? `\n${pageIndicator(cur, totalPages, lang)}` : ""),
     rows,
   );
 }
@@ -332,24 +397,43 @@ async function showServices(env, user, lang, page = 0) {
   const services = (await list(env, "service"))
     .filter((s) => s.userId === String(user.id))
     .sort((a, b) => b.createdAt - a.createdAt);
+  const per = 8, totalPages = Math.max(1, Math.ceil(services.length / per));
+  const cur = Math.max(0, Math.min(page, totalPages - 1));
+  if (!services.length) {
+    return say(
+      env,
+      user,
+      tr("هنوز سرویسی ثبت نشده است.\nاولین سرویس را با خرید یک پلن بسازید:", "You have no services yet.\nCreate your first one from a plan:", lang),
+      [
+        [{ text: tr("🛍 خرید سرویس", "🛍 Buy service", lang), callback_data: "vpn:plans:0", style: "success" }],
+        [{ text: tr("🏠 خدمات", "🏠 Services", lang), callback_data: "vpn:home" }],
+      ],
+    );
+  }
   const rows = services
-    .slice(page * 8, page * 8 + 8)
+    .slice(cur * per, cur * per + per)
     .map((s) => [
       btn(
-        `${s.title.slice(0, 30)} · ${s.username.slice(0, 20)}`,
+        `${s.title.slice(0, 18)} · ${s.username.slice(0, 16)}`,
         `vpn:service:${s.id}`,
       ),
     ]);
-  if (page > 0) rows.push([btn("‹", "vpn:mine:" + (page - 1))]);
-  if (services.length > (page + 1) * 8)
-    rows.push([btn("›", "vpn:mine:" + (page + 1))]);
-  rows.push([btn(tr("⬅️ بازگشت", "⬅️ Back", lang), "vpn:home")]);
+  if (totalPages > 1) {
+    const nav = [];
+    if (cur > 0) nav.push(btn("‹ " + tr("قبلی", "Prev", lang), "vpn:mine:" + (cur - 1)));
+    nav.push({ text: `📄 ${pageIndicator(cur, totalPages, lang)}`, callback_data: "vpn:noop" });
+    if (cur < totalPages - 1) nav.push(btn(tr("بعدی", "Next", lang) + " ›", "vpn:mine:" + (cur + 1)));
+    rows.push(nav);
+  }
+  rows.push([
+    btn(tr("◀ خدمات", "◀ Services", lang), "vpn:home"),
+    btn(tr("🏠 اصلی", "🏠 Home", lang), "vpn:home"),
+  ]);
   return say(
     env,
     user,
-    services.length
-      ? tr("سرویس‌های شما:", "Your services:", lang)
-      : tr("هنوز سرویسی ثبت نشده است.", "You have no services yet.", lang),
+    tr("سرویس‌های شما:", "Your services:", lang) +
+      (totalPages > 1 ? `\n${pageIndicator(cur, totalPages, lang)}` : ""),
     rows,
   );
 }
@@ -358,32 +442,40 @@ async function showService(env, user, lang, serviceId) {
   const panel = s.panelId ? await get(env, "panel", s.panelId) : null;
   const isBpb = panel?.type === "bpb" && !["deleted", "refunded", "cancelled"].includes(s.status);
   const daily = isBpb ? await bpbDailyEstimate(env, s) : null;
+  const statusMap = { active: '✅ ' + tr('فعال', 'Active', lang), pending: '⏳ ' + tr('در صف ساخت', 'Queued', lang), provisioning: '⏳ ' + tr('در حال ساخت', 'Provisioning', lang), expired: '⌛ ' + tr('منقضی', 'Expired', lang), deleted: '❌ ' + tr('حذف‌شده', 'Deleted', lang), refunded: '↩️ ' + tr('مستردشده', 'Refunded', lang), cancelled: '❌ ' + tr('لغوشده', 'Cancelled', lang) };
+  const status = statusMap[String(s.status || '').toLowerCase()] || String(s.status || '—');
+  const expiry = s.expiresAt ? new Date(s.expiresAt * 1000).toLocaleDateString(lang === 'en' ? 'en-US' : 'fa-IR') : '—';
+  const quota = s.dataLimit ? (s.dataLimit / 1073741824).toFixed(2) + ' GB' : '∞';
+  let dailyLine = '';
+  if (daily && Number(daily.quotaGB) > 0) {
+    const pct = Math.min(100, Math.round((Number(daily.usedGB) / Number(daily.quotaGB)) * 100));
+    dailyLine = `\n📊 ${tr("مصرف امروز (تخمینی)", "Estimated use today", lang)}: ${daily.usedGB} / ${daily.quotaGB} GB\n${progressBar(pct)}`;
+  } else if (daily) {
+    dailyLine = `\n📊 ${tr("مصرف امروز (تخمینی)", "Estimated use today", lang)}: ${daily.usedGB} / ${daily.quotaGB} GB`;
+  }
   return say(
     env,
     user,
-    `📡 ${s.title}\n${s.username}\n${s.status}\n${tr("حجم", "Quota", lang)}: ${s.dataLimit ? (s.dataLimit / 1073741824).toFixed(2) + " GB" : "∞"}\n${tr("زمان", "Expiry", lang)}: ${s.expiresAt ? new Date(s.expiresAt * 1000).toISOString().slice(0, 10) : "—"}${daily ? `\n${tr("مصرف امروز (تخمینی)", "Estimated use today", lang)}: ${daily.usedGB} / ${daily.quotaGB} GB` : ""}\n${s.lastSyncError ? "⚠️ " + tr("بروزرسانی اطلاعات پنل ناموفق بوده است.", "Provider refresh failed.", lang) : ""}`,
+    `📡 ${s.title}\n👤 ${s.username}\n${status}\n💾 ${tr("حجم", "Quota", lang)}: ${quota}\n⏳ ${tr("انقضا", "Expiry", lang)}: ${expiry}${dailyLine}${s.lastSyncError ? "\n⚠️ " + tr("بروزرسانی پنل ناموفق بود؛ قفل نیست، بعدا خودکار تلاش می‌شود.", "Provider refresh failed; will retry automatically.", lang) : ""}`,
     [
       [
-        btn(
-          tr("🔑 کانفیگ و لینک", "🔑 Configs & link", lang),
-          "vpn:content:" + s.id,
-        ),
+        { text: tr("🔑 کانفیگ و لینک", "🔑 Configs & link", lang), callback_data: "vpn:content:" + s.id, style: "primary" },
       ],
       [
-        btn(tr("🔄 تمدید", "🔄 Renew", lang), "vpn:renew:" + s.id),
+        { text: tr("🔄 تمدید", "🔄 Renew", lang), callback_data: "vpn:renew:" + s.id, style: "success" },
         btn(tr("🌐 مدیریت کامل", "🌐 Manage", lang), "vpn:portal"),
       ],
       ...(isBpb
         ? [
             [
-              btn(
-                tr("❌ لغو و بازگشت وجه", "❌ Cancel & refund", lang),
-                "vpn:cancel:" + s.id,
-              ),
+              { text: tr("❌ لغو و بازگشت وجه", "❌ Cancel & refund", lang), callback_data: "vpn:cancel:" + s.id, style: "danger" },
             ],
           ]
         : []),
-      [btn(tr("📋 فهرست سرویس‌ها", "📋 My services", lang), "vpn:mine:0")],
+      [
+        btn(tr("📋 فهرست سرویس‌ها", "📋 My services", lang), "vpn:mine:0"),
+        btn(tr("🏠 خدمات", "🏠 Services", lang), "vpn:home"),
+      ],
     ],
   );
 }
@@ -391,20 +483,22 @@ async function showQuote(env, user, lang, q) {
   await say(
     env,
     user,
-    `🧾 ${q.planTitle}\n${q.volumeGB} GB · ${q.days} ${tr("روز", "days", lang)}\n${tr("مبلغ نهایی", "Total", lang)}: ${amount(q.amount, lang)}\n${tr("اعتبار قابل استفاده", "Available", lang)}: ${amount(q.available, lang)}${q.shortfall ? "\n" + tr("کسری موجودی", "Shortfall", lang) + ": " + amount(q.shortfall, lang) : ""}`,
+    `🧾 ${q.planTitle}\n${q.volumeGB} GB · ${q.days} ${tr("روز", "days", lang)}\n💰 ${tr("مبلغ نهایی", "Total", lang)}: ${amount(q.amount, lang)}\n💳 ${tr("اعتبار قابل استفاده", "Available", lang)}: ${amount(q.available, lang)}${q.shortfall ? "\n⚠️ " + tr("کسری موجودی", "Shortfall", lang) + ": " + amount(q.shortfall, lang) : ""}\n⏳ ${tr("۵ دقیقه برای تایید فرصت دارید.", "You have 5 minutes to confirm.", lang)}`,
     [
       [
-        btn(
-          tr("✅ تأیید خرید از کیف پول", "✅ Pay from wallet", lang),
-          "vpn:confirm:" + q.id,
-        ),
+        { text: tr("✅ تأیید خرید از کیف پول", "✅ Pay from wallet", lang), callback_data: "vpn:confirm:" + q.id, style: "success" },
       ],
       [btn(tr("💳 شارژ کیف پول", "💳 Top up", lang), "vpn:wallet")],
+      [
+        btn(tr("◀ پلن‌ها", "◀ Plans", lang), "vpn:plans:0"),
+        btn(tr("❌ انصراف", "❌ Cancel", lang), "vpn:home"),
+      ],
     ],
   );
 }
 export async function serviceCallback(env, user, lang, data) {
   if (!data.startsWith("vpn:")) return false;
+  if (data === "vpn:noop") return true;
   if (!enabled(await getSettings(env), "services")) return false;
   await limited(env, "bot:" + user.id, 30, 60);
   await initializeAccount(env, user);
@@ -434,18 +528,22 @@ export async function serviceCallback(env, user, lang, data) {
         await quote(env, user.id, { planId: value }),
       );
   } else if (act === "confirm") {
+    await say(env, user, tr("⏳ در حال ثبت سفارش…", "⏳ Placing order…", lang));
     const o = await purchase(env, user.id, value);
     await say(
       env,
       user,
       tr(
-        "✅ سفارش ثبت شد. ساخت سرویس در صف سرور انجام می‌شود؛ نتیجه را همین‌جا دریافت می‌کنید.",
-        "✅ Order queued. Provisioning runs on the server; delivery will arrive here.",
+        "✅ سفارش ثبت شد.\nساخت سرویس در صف سرور است؛ لینک و کانفیگ همین‌جا می‌آید.",
+        "✅ Order queued.\nProvisioning is running; link and config will arrive here.",
         lang,
       ) +
         "\n#" +
         o.id,
-      [[btn(tr("📡 سرویس‌های من", "📡 My services", lang), "vpn:mine:0")]],
+      [
+        [{ text: tr("📡 سرویس‌های من", "📡 My services", lang), callback_data: "vpn:mine:0", style: "primary" }],
+        [{ text: tr("🏠 خدمات", "🏠 Services", lang), callback_data: "vpn:home" }],
+      ],
     );
   } else if (act === "trial") {
     const s = await serviceSettings(env);
@@ -473,8 +571,12 @@ export async function serviceCallback(env, user, lang, data) {
       ),
     ];
     for (const item of parts) {
-      for (let i = 0; i < item.length; i += 3800)
-        await say(env, user, item.slice(i, i + 3800));
+      for (let i = 0; i < item.length; i += 3800) {
+        const chunk = item.slice(i, i + 3800);
+        await say(env, user, chunk, [
+          [{ text: tr("📋 کپی", "📋 Copy", lang), type: "copy", value: chunk.slice(0, 256) }],
+        ]);
+      }
     }
     if (!parts.length)
       await say(
@@ -504,10 +606,12 @@ export async function serviceCallback(env, user, lang, data) {
     await say(
       env,
       user,
-      `❌ ${tr("لغو سرویس و بازگشت وجه به کیف پول؟", "Cancel the service and refund to wallet?", lang)}\n${s.title}\n${tr("روزهای باقی‌مانده", "Remaining days", lang)}: ${q.remainingDays} / ${q.totalDays}\n${tr("مبلغ بازگشتی", "Refund amount", lang)}: ${amount(q.amount, lang)}\n${tr("پس از لغو، لینک اشتراک از کار می‌افتد.", "The subscription link stops working after cancellation.", lang)}`,
+      `❌ ${tr("لغو سرویس و بازگشت وجه به کیف پول؟", "Cancel the service and refund to wallet?", lang)}\n${s.title}\n${tr("روزهای باقی‌مانده", "Remaining days", lang)}: ${q.remainingDays} / ${q.totalDays}\n${tr("مبلغ بازگشتی", "Refund amount", lang)}: ${amount(q.amount, lang)}\n⚠️ ${tr("پس از لغو، لینک اشتراک از کار می‌افتد و قابل بازگشت نیست.", "The subscription link stops working after cancellation and cannot be restored.", lang)}`,
       [
-        [btn(tr("✅ بله، لغو کن", "✅ Yes, cancel it", lang), "vpn:cancel_yes:" + s.id)],
-        [btn(tr("⬅️ بازگشت", "⬅️ Back", lang), "vpn:service:" + s.id)],
+        [
+          btn(tr("◀ بازگشت", "◀ Back", lang), "vpn:service:" + s.id),
+          { text: tr("💥 بله، لغو کن", "💥 Yes, cancel it", lang), callback_data: "vpn:cancel_yes:" + s.id, style: "danger" },
+        ],
       ],
     );
   } else if (act === "cancel_yes") {
@@ -517,20 +621,27 @@ export async function serviceCallback(env, user, lang, data) {
   else if (act === "wallet") {
     const a = await account(env, user.id),
       gateways = (await list(env, "gateway")).filter((g) => g.enabled);
+    const rows = gateways
+      .slice(0, 6)
+      .map((g) => [{ text: "➕ " + g.title.slice(0, 20), callback_data: "vpn:topup:" + g.id, style: "success" }])
+      .concat([
+        [
+          btn(
+            tr("🌐 تاریخچه و پرداخت‌ها", "🌐 Transactions", lang),
+            "vpn:portal",
+          ),
+        ],
+        [
+          btn(tr("◀ خدمات", "◀ Services", lang), "vpn:home"),
+          btn(tr("🏠 اصلی", "🏠 Home", lang), "vpn:home"),
+        ],
+      ]);
     await say(
       env,
       user,
-      `💰 ${tr("مانده کیف پول", "Wallet balance", lang)}: ${amount(a.balance, lang)}\n${tr("رزرو سفارش‌ها", "Reserved", lang)}: ${amount(a.held, lang)}\n${tr("قابل استفاده", "Available", lang)}: ${amount(available(a), lang)}`,
-      gateways
-        .map((g) => [btn("➕ " + g.title, "vpn:topup:" + g.id)])
-        .concat([
-          [
-            btn(
-              tr("🌐 تاریخچه و پرداخت‌ها", "🌐 Transactions", lang),
-              "vpn:portal",
-            ),
-          ],
-        ]),
+      `💰 ${tr("کیف پول", "Wallet", lang)}\n${tr("مانده", "Balance", lang)}: ${amount(a.balance, lang)}\n${tr("رزرو سفارش‌ها", "Reserved", lang)}: ${amount(a.held, lang)}\n✅ ${tr("قابل استفاده", "Available", lang)}: ${amount(available(a), lang)}` +
+        (gateways.length ? `\n${tr("روش شارژ را انتخاب کنید:", "Choose a top-up method:", lang)}` : `\n⚠️ ${tr("فعلا روش شارژی فعال نیست؛ با پشتیبانی تماس بگیرید.", "No top-up method is active; contact support.", lang)}`),
+      rows,
     );
   } else if (act === "topup") {
     user.flow = { type: "svc_topup", gatewayId: value };
@@ -540,12 +651,11 @@ export async function serviceCallback(env, user, lang, data) {
     await say(
       env,
       user,
-      tr(
-        "مبلغ شارژ به تومان را بفرستید:",
-        "Send the top-up amount in toman:",
-        lang,
-      ) +
-        `\n${amount(s.topupMin, lang)} — ${amount(s.topupMax, lang)}\n/cancel`,
+      `💳 ${tr("شارژ کیف پول", "Top up wallet", lang)} · ${tr("مرحله ۱/۲", "Step 1/2", lang)}\n${tr("مبلغ به تومان را بفرستید. مثال: 50000", "Send the amount in toman. Example: 50000", lang)}` +
+        `\n${tr("محدوده مجاز", "Allowed range", lang)}: ${amount(s.topupMin, lang)} — ${amount(s.topupMax, lang)}\n/cancel`,
+      [
+        [{ text: tr("❌ انصراف", "❌ Cancel", lang), callback_data: "vpn:wallet" }],
+      ],
     );
   } else if (act === "receipt") {
     const p = await get(env, "payment", value);
@@ -556,11 +666,10 @@ export async function serviceCallback(env, user, lang, data) {
     await say(
       env,
       user,
-      tr(
-        "عکس یا PDF رسید را بفرستید. رسید فقط پس از بررسی مدیر تأیید می‌شود.",
-        "Send a receipt photo or PDF. An administrator must verify it.",
-        lang,
-      ),
+      `📎 ${tr("ارسال رسید", "Submit receipt", lang)} · ${tr("مرحله ۲/۲", "Step 2/2", lang)}\n${tr("عکس یا PDF رسید را بفرستید (حداکثر ۱۰ مگ). رسید فقط پس از بررسی مدیر تأیید می‌شود.", "Send a receipt photo or PDF (max 10 MB). An administrator must verify it.", lang)}\n/cancel`,
+      [
+        [{ text: tr("❌ انصراف", "❌ Cancel", lang), callback_data: "vpn:wallet" }],
+      ],
     );
   } else if (act === "gift") {
     user.flow = { type: "svc_gift" };
@@ -569,7 +678,10 @@ export async function serviceCallback(env, user, lang, data) {
     await say(
       env,
       user,
-      tr("کد هدیه را بفرستید. /cancel", "Send your gift code. /cancel", lang),
+      `🎁 ${tr("کد هدیه", "Gift code", lang)}\n${tr("کد را دقیق بفرستید. مثال: GIFT-ABC123", "Send the exact code. Example: GIFT-ABC123", lang)}\n/cancel`,
+      [
+        [{ text: tr("❌ انصراف", "❌ Cancel", lang), callback_data: "vpn:home" }],
+      ],
     );
   } else if (act === "agent") {
     await requestAgent(env, user.id, "درخواست از ربات");
@@ -587,15 +699,13 @@ export async function serviceCallback(env, user, lang, data) {
     await say(
       env,
       user,
-      tr("هزینه هر چرخش", "Cost per spin", lang) +
-        ": " +
-        amount(s.wheel.fee, lang),
+      `🎡 ${tr("گردونه شانس", "Lucky wheel", lang)}\n${tr("هزینه هر چرخش", "Cost per spin", lang)}: ` +
+        amount(s.wheel.fee, lang) +
+        `\n⚠️ ${tr("پس از چرخش مبلغ برگشت ندارد.", "Spins are non-refundable.", lang)}`,
       [
         [
-          btn(
-            tr("🎡 تأیید و چرخش", "🎡 Confirm spin", lang),
-            "vpn:spin:" + id() + ":" + s.wheel.fee,
-          ),
+          btn(tr("◀ بازگشت", "◀ Back", lang), "vpn:home"),
+          { text: tr("🎡 تأیید و چرخش", "🎡 Confirm spin", lang), callback_data: "vpn:spin:" + id() + ":" + s.wheel.fee, style: "success" },
         ],
       ],
     );

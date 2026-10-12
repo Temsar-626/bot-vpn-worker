@@ -30,13 +30,16 @@ export async function completeSignup(env, user, settings) {
 export async function showPoints(env, token, user, settings, lang) {
   const acc = await pointsAccount(env, user.id);
   let msg = `${tr('⭐ امتیاز شما', '⭐ Your points', lang)}: ${acc.points}\n${tr('دعوت‌های معتبر', 'Qualified referrals', lang)}: ${acc.referrals}`;
-  if (settings.botUsername) msg += `\n\n${tr('لینک معرفی شما', 'Your referral link', lang)}:\nhttps://t.me/${settings.botUsername}?start=ref_${user.id}\n\n${tr('امتیاز فقط برای کاربر جدید، پس از ورود و عبور از قفل عضویت ثبت می‌شود؛ شمارش ورود به ربات است، نه اثبات هویت یکتای انسان.', 'Only new users who pass the membership gate count. This tracks bot signups, not verified unique human identities.', lang)}`;
+  const refLink = settings.botUsername ? `https://t.me/${settings.botUsername}?start=ref_${user.id}` : '';
+  if (refLink) msg += `\n\n${tr('لینک معرفی شما', 'Your referral link', lang)}:\n${refLink}\n\n${tr('امتیاز فقط برای کاربر جدید، پس از ورود و عبور از قفل عضویت ثبت می‌شود؛ شمارش ورود به ربات است، نه اثبات هویت یکتای انسان.', 'Only new users who pass the membership gate count. This tracks bot signups, not verified unique human identities.', lang)}`;
+  const rows = [];
+  if (refLink) {
+    rows.push([{ text: tr('📋 کپی لینک', '📋 Copy link', lang), copy_text: { text: refLink.slice(0, 256) }, style: 'primary' }]);
+    rows.push([{ text: tr('📤 اشتراک با دوست', '📤 Share', lang), switch_inline_query: `ref_${user.id}` }]);
+  }
+  rows.push([{ text: tr('🔙 بازگشت به منوی اصلی', '🔙 Back to main menu', lang), callback_data: 'sub:root' }]);
   return sendToUser(token, user.id, msg, {
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: tr('🔙 بازگشت به منوی اصلی', '🔙 Back to main menu', lang), callback_data: 'sub:root' }],
-      ],
-    },
+    reply_markup: { inline_keyboard: rows },
   });
 }
 export async function progress(env, token, user, lang) {

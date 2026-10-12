@@ -15,10 +15,23 @@ export function pollKeyboard(poll) {
 export const sendPollToChat = (token, chatId, poll) => sendToUser(token, chatId, renderPollText(poll), { reply_markup: pollKeyboard(poll) });
 export function reactMarkup(post, settings) {
   const rows = post.buttons || [];
-  const reactions = post.reactions !== false ? [[{ text: `👍 ${post.likes || 0}`, callback_data: `react:${post.id}:l` }, { text: `👎 ${post.dislikes || 0}`, callback_data: `react:${post.id}:d` }]] : [];
+  // Callback reactions (counts in label so meaning survives without color/emoji-only).
+  const reactions = post.reactions !== false ? [[{ text: `👍 ${post.likes || 0} پسند`, callback_data: `react:${post.id}:l` }, { text: `👎 ${post.dislikes || 0}`, callback_data: `react:${post.id}:d` }]] : [];
   const username = settings?.botUsername || post.botUsername;
   if (post.feedback && username) reactions.push([{ text: '💬 نظر / Feedback', url: `https://t.me/${username}?start=fb_${post.id}` }]);
   return { inline_keyboard: [...rows, ...reactions] };
+}
+// Native Telegram reaction (setMessageReaction). Best-effort: never throws,
+// old clients and non-reactable messages just ignore it. Bots can't use paid
+// reactions; service messages can't be reacted to.
+export async function nativeReact(token, chatId, messageId, emoji = '🔥') {
+  try {
+    if (!token || !chatId || !messageId) return;
+    await tgApi(token, 'setMessageReaction', {
+      chat_id: chatId, message_id: messageId,
+      reaction: [{ type: 'emoji', emoji }],
+    });
+  } catch { /* best-effort only */ }
 }
 export async function engagementCallback(env, token, user, settings, lang, cb) {
   const data = String(cb.data || ''), [cmd, pid, act] = data.split(':');
