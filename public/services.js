@@ -45,7 +45,7 @@ const SV_PF_GROUPS = {
   "pf-cf": SV_PF_API_PANELS,
   "gw-card": ["manual"],
   "gw-merchant": ["zarinpal", "aqaye", "tetrapay"],
-  "gw-apikey": ["tonpay", "blupal", "cubepay", "tronado","tetrapay", "iranpay3", "zarinpay", "nowpayments", "plisio"],
+  "gw-apikey": ["tonpay", "blupal", "cubepay", "tronado", "rentopay", "tetrapay", "iranpay3", "zarinpay", "nowpayments", "plisio"],
   "gw-ipn": ["nowpayments", "tronado"],
   "gw-sandbox": ["zarinpal"],
   "gw-currency": ["crypto", "plisio"],
@@ -332,6 +332,9 @@ vError = (code) => {
     panel_token_required: L("توکن API پنل الزامی است.", "Provider API token is required."),
     signed_webhook_required: L("تأیید ترونادو فقط از وب‌هوک امضاشده انجام می‌شود؛ پس از پرداخت منتظر بمانید.", "Tronado requires its signed webhook; wait for the payment notification."),
     payment_requires_review: L("وضعیت این فاکتور نیازمند بررسی مدیر است.", "This invoice requires administrator review."),
+    rentopay_min_amount: L("حداقل مبلغ فاکتور رنتوپی ۱۰۰٬۰۰۰ تومان است؛ مبلغ شارژ را افزایش دهید.", "RentoPay's minimum invoice is 100,000 toman. Increase the top-up amount."),
+    rentopay_max_amount: L("حداکثر مبلغ فاکتور رنتوپی ۵٬۰۰۰٬۰۰۰ تومان است.", "RentoPay's maximum invoice is 5,000,000 toman."),
+    payment_amount_mismatch: L("مبلغ تأییدشدهٔ درگاه با مبلغ فاکتور یکسان نیست.", "The gateway-verified amount does not match the invoice."),
     unmanaged_wireguard_schedule_requires_review: L(
       "Job محدودیت ناشناخته روی peer وجود دارد؛ قبل از تمدید بررسی کنید.",
       "The peer has unmanaged limit jobs. Review before renewing.",

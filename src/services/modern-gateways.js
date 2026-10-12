@@ -9,9 +9,21 @@ export const MODERN_GATEWAYS = {
   blupal: "BluPal / بلوپال",
   cubepay: "QubePay / کیوب‌پی",
   tronado: "Tronado / ترونادو",
+  rentopay: "RentoPay / رنتوپی",
 };
 export const isModernGateway = (type) => Object.hasOwn(MODERN_GATEWAYS, type);
-export const POLLED_GATEWAYS = ["tonpay", "blupal", "cubepay"];
+export const POLLED_GATEWAYS = ["tonpay", "blupal", "cubepay", "rentopay"];
+// RentoPay bills in rials and the panel stores toman (10 rials = 1 toman), so
+// every invoice amount is multiplied by ten. Its published invoice window is
+// 15–360 minutes and the system limits are 1,000,000–50,000,000 rials; the live
+// per-merchant values come from GET /api/v1/payments/config. The limits are
+// checked here so an out-of-range top-up fails with a message the operator can
+// act on instead of an opaque remote 400.
+const RENTOPAY_URL = "https://rentopay.bid/api/v1/payments";
+const RENTOPAY_MIN_RIALS = 1000000;
+const RENTOPAY_MAX_RIALS = 50000000;
+const RENTOPAY_MIN_MINUTES = 15;
+const RENTOPAY_MAX_MINUTES = 360;
 async function json(url, method, body, headers) {
   return expectResponse(await fetchLimited(url, {
     method, headers: { "content-type": "application/json", ...headers },
@@ -63,6 +75,45 @@ export async function createModernInvoice(p, g, secret, callback) {
       rateSnapshot: { source: "tronado", coinToman: decimalString(rate, 6), at: Date.now() },
     };
   }
+  if (p.type === "rentopay") {
+    const rials = p.amount * 10;
+    assert(
+      Number.isInteger(rials) && rials >= RENTOPAY_MIN_RIALS,
+      "rentopay_min_amount",
+    );
+    assert(rials <= RENTOPAY_MAX_RIALS, "rentopay_max_amount");
+    // Ask for exactly as long as this panel keeps the invoice payable, clamped
+    // to the gateway window, so a customer can never pay an invoice whose local
+    // deadline has already passed while the gateway still accepted it.
+    const minutes = Math.min(
+      RENTOPAY_MAX_MINUTES,
+      Math.max(
+        RENTOPAY_MIN_MINUTES,
+        Math.ceil((p.expiresAt - Date.now()) / 60000),
+      ),
+    );
+    r = await json(RENTOPAY_URL, "POST", {
+      amount: rials,
+      order_id: p.id,
+      expires_in_minutes: minutes,
+    }, keyHeader(secret));
+    assert(r.success === true, "gateway_create_failed");
+    assert(String(r.order_id) === p.id, "payment_invoice_mismatch");
+    assert(/^[A-Za-z0-9_-]{8,64}$/.test(String(r.token || "")), "gateway_create_failed");
+    assert(Number(r.amount_rials) === rials, "payment_amount_mismatch");
+    assert(
+      /^https:\/\/t\.me\//.test(String(r.payment_url || "")),
+      "gateway_create_failed",
+    );
+    const expiresAt = Date.parse(r.expires_at);
+    return {
+      remoteId: String(r.token),
+      url: r.payment_url,
+      // The gateway owns the deadline: adopt its expiry verbatim so the local
+      // record cannot expire a link that is still payable.
+      ...(Number.isFinite(expiresAt) && expiresAt > Date.now() ? { expiresAt } : {}),
+    };
+  }
   throw new Error("unsupported_gateway");
 }
 
@@ -86,6 +137,22 @@ export async function verifyModernInvoice(p, secret) {
     assert(r.success === true && String(r.order_id) === p.id, "payment_invoice_mismatch");
     assert(["paid", "verified", "completed"].includes(r.status), "payment_not_verified");
     assert(decimalUnits(r.amount ?? r.price_amount, 2) === BigInt(p.gatewayAmount) * 100n, "payment_amount_mismatch");
+  } else if (p.type === "rentopay") {
+    // Polling only: RentoPay's webhook signing string is not documented, so the
+    // authenticated server-to-server verify is the sole proof of payment. This
+    // call is also scoped to the merchant that owns the invoice, so another
+    // merchant's token can never be credited here.
+    r = await json(RENTOPAY_URL + "/verify", "POST", {
+      token: p.remoteId,
+    }, keyHeader(secret));
+    assert(String(r.order_id) === p.id, "payment_invoice_mismatch");
+    assert(r.verified === true && r.status === "PAID", "payment_not_verified");
+    // The wallet is credited the invoice face value in rials; the gateway fee
+    // and the merchant share are never moved to the customer or the balance.
+    assert(
+      decimalUnits(r.amount_rials, 0) === BigInt(p.amount) * 10n,
+      "payment_amount_mismatch",
+    );
   } else {
     // Tronado must enter through the raw-body signature-verifying webhook, not
     // a customer's JSON /verify request or a browser redirect.

@@ -121,3 +121,113 @@ test("new gateway network failures remain reviewable and never credit", async ()
   await assert.rejects(() => invoice(g), /provider_network_error/);
   assert.equal((await account(h.env, 42)).balance, 0);
 });
+// RentoPay bills in rials (10 rials = 1 toman) and refuses invoices under
+// 100,000 toman, so it cannot reuse the shared invoice() helper above.
+const RENTOPAY_TOKEN = "b6f0d3a9c21e4f7a8d5b0c3e";
+const rentopayCreate = (body) => ({
+  success: true,
+  token: RENTOPAY_TOKEN,
+  payment_url: "https://t.me/rentopaybot?start=" + RENTOPAY_TOKEN,
+  amount_rials: body.amount,
+  fee_payer: "MERCHANT",
+  fee_rials: 300000,
+  total_amount_rials: body.amount,
+  order_id: body.order_id,
+  expires_at: new Date(Date.now() + 3600000).toISOString(),
+});
+// requestId is an idempotency key, so every attempt needs its own value.
+let rpSeq = 0;
+const rentopayInvoice = async (g, amount = 100000) =>
+  get(h.env, "payment", (await createPayment(h.env, 42, {
+    gatewayId: g.id, amount, requestId: "request_rp_" + ++rpSeq + "_" + g.id,
+  })).id);
+test("RentoPay: rial conversion, order binding, underpayment rejection and one-time credit", async () => {
+  let created, fault = "identity", p;
+  let expiresAt = 0;
+  tg.setOverride((url, _method, body) => {
+    if (url === "https://rentopay.bid/api/v1/payments") {
+      created = body;
+      const r = rentopayCreate(body);
+      expiresAt = Date.parse(r.expires_at);
+      return r;
+    }
+    if (url === "https://rentopay.bid/api/v1/payments/verify") {
+      return {
+        success: true,
+        verified: fault !== "pending",
+        status: fault === "pending" ? "PENDING" : "PAID",
+        amount_rials: fault === "amount" ? 1 : p.amount * 10,
+        order_id: fault === "identity" ? "wrong-order" : p.id,
+        merchant_share_rials: p.amount * 10,
+        paid_at: null,
+      };
+    }
+  });
+  const g = await gateway("rentopay");
+  p = await rentopayInvoice(g);
+  assert.equal(created.amount, 1000000, "the toman amount is sent to RentoPay as rials");
+  assert.equal(created.order_id, p.id, "the local payment id is used as the remote order id");
+  assert.ok(created.expires_in_minutes >= 15 && created.expires_in_minutes <= 360, "the requested window stays inside the gateway limits");
+  assert.equal(p.url, "https://t.me/rentopaybot?start=" + RENTOPAY_TOKEN);
+  assert.equal(p.expiresAt, expiresAt, "the gateway expiry is adopted verbatim so the local record never expires a payable link");
+  await assert.rejects(() => verifyPayment(h.env, p), /invoice_mismatch/);
+  fault = "amount";
+  await assert.rejects(() => verifyPayment(h.env, p), /amount_mismatch/);
+  fault = "pending";
+  await assert.rejects(() => verifyPayment(h.env, p), /payment_not_verified/);
+  assert.equal((await account(h.env, 42)).balance, 0);
+  fault = "none";
+  await verifyPayment(h.env, p, { token: RENTOPAY_TOKEN, verified: true, status: "PAID" });
+  await verifyPayment(h.env, p);
+  assert.equal((await account(h.env, 42)).balance, 100000, "the wallet is credited the invoice face value");
+  assert.equal((await get(h.env, "payment", p.id)).status, "paid");
+});
+test("RentoPay: a rejected receipt never credits and polling settles without a callback", async () => {
+  let receipt = "REJECTED", requested;
+  tg.setOverride((url, _method, body) => {
+    if (url === "https://rentopay.bid/api/v1/payments") {
+      requested = body;
+      return rentopayCreate(body);
+    }
+    if (url === "https://rentopay.bid/api/v1/payments/verify")
+      return { success: true, verified: receipt === "PAID", status: receipt, amount_rials: requested.amount, order_id: requested.order_id, merchant_share_rials: 850000, paid_at: null };
+  });
+  const g = await gateway("rentopay");
+  const mine = await rentopayInvoice(g);
+  await assert.rejects(() => verifyPayment(h.env, mine), /payment_not_verified/);
+  assert.equal((await account(h.env, 42)).balance, 0);
+  assert.equal((await get(h.env, "payment", mine.id)).status, "pending", "a rejected receipt leaves the invoice open for a retry");
+  receipt = "PAID";
+  await fundingTick(h.env);
+  await fundingTick(h.env);
+  assert.equal((await get(h.env, "payment", mine.id)).status, "paid");
+  assert.equal((await account(h.env, 42)).balance, 100000);
+});
+test("RentoPay: amounts outside the account limits are refused before any request is sent", async () => {
+  let calls = 0;
+  tg.setOverride((url) => { calls++; throw new Error("unexpected gateway call: " + url); });
+  const g = await gateway("rentopay");
+  await assert.rejects(
+    () => createPayment(h.env, 42, { gatewayId: g.id, amount: 99999, requestId: "request_rp_low" }),
+    /rentopay_min_amount/,
+  );
+  await assert.rejects(
+    () => createPayment(h.env, 42, { gatewayId: g.id, amount: 5000001, requestId: "request_rp_high" }),
+    /rentopay_max_amount/,
+  );
+  assert.equal(calls, 0, "no out-of-range invoice ever reaches the gateway");
+});
+test("RentoPay: a rejected API key or an unreachable gateway never credits", async () => {
+  const g = await gateway("rentopay");
+  tg.setOverride((url) =>
+    url === "https://rentopay.bid/api/v1/payments"
+      ? new Response(JSON.stringify({ success: false, error: "کلید API نامعتبر است" }), { status: 401 })
+      : undefined,
+  );
+  await assert.rejects(() => rentopayInvoice(g), /provider_auth_failed/);
+  tg.setOverride((url) => {
+    if (url === "https://rentopay.bid/api/v1/payments") throw new Error("timeout");
+  });
+  await assert.rejects(() => rentopayInvoice(g, 200000), /provider_network_error/);
+  assert.equal((await account(h.env, 42)).balance, 0);
+});
