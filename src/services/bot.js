@@ -141,6 +141,22 @@ export function serviceError(code, lang = "fa") {
       "This provider does not support that action.",
     ],
     invalid_amount: ["مبلغ معتبر وارد کنید.", "Enter a valid amount."],
+    rentopay_min_amount: [
+      "حداقل شارژ با این روش ۱۰۰٬۰۰۰ تومان است.",
+      "The minimum top-up with this method is 100,000 toman.",
+    ],
+    rentopay_max_amount: [
+      "حداکثر شارژ با این روش ۵٬۰۰۰٬۰۰۰ تومان است.",
+      "The maximum top-up with this method is 5,000,000 toman.",
+    ],
+    rentopay_amount_step: [
+      "مبلغ باید مضربی از ۱٬۰۰۰ تومان باشد (مثلاً ۱۰۰٬۰۰۰).",
+      "The amount must be a multiple of 1,000 toman.",
+    ],
+    gateway_credentials_required: [
+      "این روش پرداخت فعلاً تنظیم نشده است؛ به پشتیبانی خبر بدهید.",
+      "This payment method is not configured. Please contact support.",
+    ],
   };
   return (
     map[code]?.[lang === "en" ? 1 : 0] ||

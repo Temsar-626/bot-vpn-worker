@@ -338,6 +338,7 @@ vError = (code) => {
     payment_requires_review: L("وضعیت این فاکتور نیازمند بررسی مدیر است.", "This invoice requires administrator review."),
     rentopay_min_amount: L("حداقل مبلغ فاکتور رنتوپی ۱۰۰٬۰۰۰ تومان است؛ مبلغ شارژ را افزایش دهید.", "RentoPay's minimum invoice is 100,000 toman. Increase the top-up amount."),
     rentopay_max_amount: L("حداکثر مبلغ فاکتور رنتوپی ۵٬۰۰۰٬۰۰۰ تومان است.", "RentoPay's maximum invoice is 5,000,000 toman."),
+    rentopay_amount_step: L("مبلغ رنتوپی باید مضربی از ۱٬۰۰۰ تومان باشد؛ مبلغ را گرد کنید (مثلاً ۱۰۰٬۰۰۰).", "RentoPay invoices must be multiples of 1,000 toman."),
     payment_amount_mismatch: L("مبلغ تأییدشدهٔ درگاه با مبلغ فاکتور یکسان نیست.", "The gateway-verified amount does not match the invoice."),
     unmanaged_wireguard_schedule_requires_review: L(
       "Job محدودیت ناشناخته روی peer وجود دارد؛ قبل از تمدید بررسی کنید.",

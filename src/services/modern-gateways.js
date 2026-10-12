@@ -14,16 +14,19 @@ export const MODERN_GATEWAYS = {
 export const isModernGateway = (type) => Object.hasOwn(MODERN_GATEWAYS, type);
 export const POLLED_GATEWAYS = ["tonpay", "blupal", "cubepay", "rentopay"];
 // RentoPay bills in rials and the panel stores toman (10 rials = 1 toman), so
-// every invoice amount is multiplied by ten. Its published invoice window is
-// 15–360 minutes and the system limits are 1,000,000–50,000,000 rials; the live
-// per-merchant values come from GET /api/v1/payments/config. The limits are
-// checked here so an out-of-range top-up fails with a message the operator can
-// act on instead of an opaque remote 400.
+// every invoice amount is multiplied by ten. The published system window is
+// 15–360 minutes and 1,000,000–50,000,000 rials in whole 1,000-toman steps,
+// but every merchant can carry custom limits, served live by
+// GET /api/v1/payments/config. The limits are checked here so an out-of-range
+// top-up fails with a message the operator can act on instead of an opaque
+// remote 400.
 const RENTOPAY_URL = "https://rentopay.bid/api/v1/payments";
 const RENTOPAY_MIN_RIALS = 1000000;
 const RENTOPAY_MAX_RIALS = 50000000;
 const RENTOPAY_MIN_MINUTES = 15;
 const RENTOPAY_MAX_MINUTES = 360;
+// 1,000 toman = 10,000 rials: the gateway only bills whole steps of this size.
+const RENTOPAY_RIAL_STEP = 10000;
 async function json(url, method, body, headers) {
   return expectResponse(await fetchLimited(url, {
     method, headers: { "content-type": "application/json", ...headers },
@@ -32,6 +35,37 @@ async function json(url, method, body, headers) {
 }
 const keyHeader = (s) => ({ "X-API-Key": s.apiKey });
 const bearer = (s) => ({ authorization: "Bearer " + s.apiKey });
+// A pasted API key containing a newline or other control character makes fetch
+// itself throw (surfaced as provider_network_error with the payment stuck in
+// review), hiding the real misconfiguration. Reject it up front with an
+// actionable code instead of letting it look like a network outage.
+const rentopayKey = (secret) => {
+  const key = String(secret?.apiKey ?? "").trim();
+  assert(key && /^[\x20-\x7E]+$/.test(key), "gateway_credentials_required");
+  return key;
+};
+async function rentopayLimits(key) {
+  // Per-merchant invoice windows live at GET /config, which is public when no
+  // key is sent and merchant-scoped with one. A limits lookup must never fail
+  // the payment itself, so any failure falls back to the published defaults.
+  try {
+    const cfg = (await json(RENTOPAY_URL + "/config", "GET", undefined, { "X-API-Key": key }))?.config;
+    const num = (v, fb) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : fb);
+    return {
+      minRials: num(cfg?.min_invoice_amount_rials, RENTOPAY_MIN_RIALS),
+      maxRials: num(cfg?.max_invoice_amount_rials, RENTOPAY_MAX_RIALS),
+      minMinutes: num(cfg?.min_expiration_minutes, RENTOPAY_MIN_MINUTES),
+      maxMinutes: num(cfg?.max_expiration_minutes, RENTOPAY_MAX_MINUTES),
+    };
+  } catch {
+    return {
+      minRials: RENTOPAY_MIN_RIALS,
+      maxRials: RENTOPAY_MAX_RIALS,
+      minMinutes: RENTOPAY_MIN_MINUTES,
+      maxMinutes: RENTOPAY_MAX_MINUTES,
+    };
+  }
+}
 
 export async function createModernInvoice(p, g, secret, callback) {
   let r;
@@ -76,27 +110,36 @@ export async function createModernInvoice(p, g, secret, callback) {
     };
   }
   if (p.type === "rentopay") {
+    const key = rentopayKey(secret);
     const rials = p.amount * 10;
     assert(
       Number.isInteger(rials) && rials >= RENTOPAY_MIN_RIALS,
       "rentopay_min_amount",
     );
     assert(rials <= RENTOPAY_MAX_RIALS, "rentopay_max_amount");
+    // The gateway only bills whole 1,000-toman steps; anything else is a 400.
+    assert(rials % RENTOPAY_RIAL_STEP === 0, "rentopay_amount_step");
+    // Narrow the published window with the merchant's live limits: a custom
+    // merchant floor/ceiling otherwise fails here as an opaque remote 400.
+    const lim = await rentopayLimits(key);
+    assert(rials >= lim.minRials, "rentopay_min_amount");
+    assert(rials <= lim.maxRials, "rentopay_max_amount");
     // Ask for exactly as long as this panel keeps the invoice payable, clamped
     // to the gateway window, so a customer can never pay an invoice whose local
     // deadline has already passed while the gateway still accepted it.
     const minutes = Math.min(
-      RENTOPAY_MAX_MINUTES,
+      lim.maxMinutes,
       Math.max(
-        RENTOPAY_MIN_MINUTES,
+        lim.minMinutes,
         Math.ceil((p.expiresAt - Date.now()) / 60000),
       ),
     );
     r = await json(RENTOPAY_URL, "POST", {
       amount: rials,
       order_id: p.id,
+      callback_url: callback,
       expires_in_minutes: minutes,
-    }, keyHeader(secret));
+    }, { "X-API-Key": key });
     assert(r.success === true, "gateway_create_failed");
     assert(String(r.order_id) === p.id, "payment_invoice_mismatch");
     assert(/^[A-Za-z0-9_-]{8,64}$/.test(String(r.token || "")), "gateway_create_failed");
@@ -138,13 +181,13 @@ export async function verifyModernInvoice(p, secret) {
     assert(["paid", "verified", "completed"].includes(r.status), "payment_not_verified");
     assert(decimalUnits(r.amount ?? r.price_amount, 2) === BigInt(p.gatewayAmount) * 100n, "payment_amount_mismatch");
   } else if (p.type === "rentopay") {
-    // Polling only: RentoPay's webhook signing string is not documented, so the
-    // authenticated server-to-server verify is the sole proof of payment. This
-    // call is also scoped to the merchant that owns the invoice, so another
-    // merchant's token can never be credited here.
+    // Polling only: RentoPay documents the webhook HMAC headers but not the
+    // signing string, so the authenticated server-to-server verify is the sole
+    // proof of payment. This call is also scoped to the merchant that owns the
+    // invoice, so another merchant's token can never be credited here.
     r = await json(RENTOPAY_URL + "/verify", "POST", {
       token: p.remoteId,
-    }, keyHeader(secret));
+    }, { "X-API-Key": rentopayKey(secret) });
     assert(String(r.order_id) === p.id, "payment_invoice_mismatch");
     assert(r.verified === true && r.status === "PAID", "payment_not_verified");
     // The wallet is credited the invoice face value in rials; the gateway fee

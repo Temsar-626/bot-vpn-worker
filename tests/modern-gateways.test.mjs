@@ -231,3 +231,51 @@ test("RentoPay: a rejected API key or an unreachable gateway never credits", asy
   await assert.rejects(() => rentopayInvoice(g, 200000), /provider_network_error/);
   assert.equal((await account(h.env, 42)).balance, 0);
 });
+test("RentoPay: non-step amounts are refused before any request is sent", async () => {
+  let calls = 0;
+  tg.setOverride((url) => { calls++; throw new Error("unexpected gateway call: " + url); });
+  const g = await gateway("rentopay");
+  await assert.rejects(
+    () => createPayment(h.env, 42, { gatewayId: g.id, amount: 100500, requestId: "request_rp_step" }),
+    /rentopay_amount_step/,
+  );
+  assert.equal(calls, 0, "a non-multiple of 1,000 toman never reaches the gateway");
+});
+test("RentoPay: a pasted key with a newline fails fast as credentials, not network", async () => {
+  let calls = 0;
+  tg.setOverride((url) => { calls++; throw new Error("unexpected gateway call: " + url); });
+  const g = await gateway("rentopay", { secret: { apiKey: "abc\ndef" } });
+  await assert.rejects(() => rentopayInvoice(g), /gateway_credentials_required/);
+  assert.equal(calls, 0, "an unloadable key must not look like a network outage");
+});
+test("RentoPay: live per-merchant limits narrow the published window", async () => {
+  let created;
+  tg.setOverride((url, _method, body) => {
+    if (url === "https://rentopay.bid/api/v1/payments/config")
+      return { success: true, config: { min_invoice_amount_rials: 2000000, max_invoice_amount_rials: 50000000, min_expiration_minutes: 15, max_expiration_minutes: 20 } };
+    if (url === "https://rentopay.bid/api/v1/payments") {
+      created = body;
+      return rentopayCreate(body);
+    }
+  });
+  const g = await gateway("rentopay");
+  // 100,000 toman passes the published floor but not this merchant's live floor.
+  await assert.rejects(() => rentopayInvoice(g), /rentopay_min_amount/);
+  assert.equal(created, undefined, "a custom merchant floor stops the create call");
+  const p = await rentopayInvoice(g, 200000);
+  assert.ok(created.callback_url.includes("/service-pay/callback/" + p.id), "the documented callback_url is sent with the invoice");
+  assert.equal(created.expires_in_minutes, 20, "the merchant's live expiry ceiling is honoured");
+});
+test("RentoPay: an unreachable config endpoint still creates with published defaults", async () => {
+  let created;
+  tg.setOverride((url, _method, body) => {
+    if (url === "https://rentopay.bid/api/v1/payments/config") throw new Error("timeout");
+    if (url === "https://rentopay.bid/api/v1/payments") {
+      created = body;
+      return rentopayCreate(body);
+    }
+  });
+  const p = await rentopayInvoice(await gateway("rentopay"));
+  assert.equal(created.amount, 1000000);
+  assert.ok(created.callback_url.includes(p.id));
+});
