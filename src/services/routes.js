@@ -260,7 +260,12 @@ admin.post("/panels/:id/test", async (c) => {
   try {
     const api = await connector(c.env, p),
       health = await api.health();
-    p.health = { ok: true, ms: health.ms || 0, at: Date.now() };
+    p.health = {
+      ok: true,
+      ms: health.ms || 0,
+      at: Date.now(),
+      ...(health.limited ? { limited: true } : {}),
+    };
     await put(c.env, "panel", p.id, p);
     return result(c, { health: p.health });
   } catch (e) {

@@ -459,15 +459,28 @@ class Connector {
     if (this.type === "stock") return { ok: true, kind: "local_inventory" };
     const start = Date.now();
     let data;
-    if (
+    let limited = false;
+    const marzSystem =
       this.type === "marzban" ||
       this.type === "marzban_v1" ||
       this.type === "pasarguard"
-    )
-      data = await this.call("/api/system");
-    else if (this.type === "marzneshin")
-      data = await this.call("/api/system/stats/users");
-    else if (this.type === "ibsng") {
+        ? "/api/system"
+        : this.type === "marzneshin"
+          ? "/api/system/stats/users"
+          : null;
+    if (marzSystem) {
+      try {
+        data = await this.call(marzSystem);
+      } catch (e) {
+        // Reseller accounts (like PasarGuard sub-admins) can manage users but
+        // lack `system.read`. A 403 here must not mark a working panel as dead:
+        // fall back to the low-privilege resources endpoint (/api/groups for
+        // PasarGuard/Marzban 1.x) which the same credentials can read.
+        if (e?.message !== "provider_auth_failed") throw e;
+        data = await this.resources();
+        limited = true;
+      }
+    } else if (this.type === "ibsng") {
       await this.login(true);
       data = { authenticated: true };
     } else if (this.type === "guard")
@@ -476,12 +489,27 @@ class Connector {
       data = await this.call("/api/v2/admin/server_status/");
     else if (this.type === "sui") data = await this.call("/apiv2/settings");
     else data = await this.resources();
-    return { ok: true, ms: Date.now() - start, at: Date.now(), data };
+    return {
+      ok: true,
+      ms: Date.now() - start,
+      at: Date.now(),
+      data,
+      ...(limited ? { limited: true } : {}),
+    };
   }
   async nodes() {
     this.supported("nodes");
     if (this.modern) return this.modern.nodes();
-    return this.call("/api/nodes");
+    try {
+      return await this.call("/api/nodes");
+    } catch (e) {
+      // Same reseller story as health(): sub-admins can sell without
+      // `nodes.read`. Surface a specific code so the panel can explain it
+      // instead of the generic "check username/password".
+      if (e?.message === "provider_auth_failed")
+        throw new Error("nodes_not_allowed_for_reseller");
+      throw e;
+    }
   }
   async reconnectNode(nodeId) {
     this.supported("nodes");

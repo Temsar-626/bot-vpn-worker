@@ -423,3 +423,40 @@ test("scientific notation from crypto gateway JSON is converted without float ar
   assert.equal(decimalUnits("1.5e3", 2), 150000n);
   assert.throws(() => decimalUnits("1e999", 6));
 });
+test("pasarguard health falls back to groups for limited reseller accounts", async () => {
+  const { c } = await api("pasarguard");
+  handler = (req) => {
+    if (req.path === "/api/system")
+      return new Response(JSON.stringify({ detail: "Permission denied" }), {
+        status: 403,
+      });
+    if (req.path === "/api/groups")
+      return { groups: [{ id: 6, name: "reseller-group" }], total: 1 };
+    return undefined;
+  };
+  const h = await c.health();
+  assert.equal(h.ok, true);
+  assert.equal(h.limited, true);
+  assert.equal(calls.some((x) => x.path === "/api/groups"), true);
+});
+test("pasarguard health uses system when full access is granted", async () => {
+  const { c } = await api("pasarguard");
+  handler = (req) => {
+    if (req.path === "/api/system") return { version: "1.0" };
+    return undefined;
+  };
+  const h = await c.health();
+  assert.equal(h.ok, true);
+  assert.equal(h.limited, undefined);
+});
+test("pasarguard nodes reports a reseller-specific error instead of auth failure", async () => {
+  const { c } = await api("pasarguard");
+  handler = (req) => {
+    if (req.path === "/api/nodes")
+      return new Response(JSON.stringify({ detail: "Permission denied" }), {
+        status: 403,
+      });
+    return undefined;
+  };
+  await assert.rejects(c.nodes(), /nodes_not_allowed_for_reseller/);
+});

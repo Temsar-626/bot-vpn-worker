@@ -181,6 +181,10 @@ vError = (code) => {
       "ورود به پنل مقصد رد شد؛ توکن یا نام کاربری و رمز را بررسی کنید.",
       "Provider authentication failed. Check its credentials.",
     ),
+    nodes_not_allowed_for_reseller: L(
+      "این اکانت نمایندگی اجازه مشاهده نودها را ندارد؛ فروش و تمدید بدون مشکل کار می‌کند.",
+      "This reseller account cannot list nodes; sales still work.",
+    ),
     provider_network_error: L(
       "ارتباط با پنل برقرار نشد. عملیات نامشخص را بدون بررسی تکرار نکنید.",
       "Provider connection failed. Inspect uncertain operations before retrying.",
@@ -564,7 +568,12 @@ ACTIONS.svTestPanel = async (d, el) => {
     const r = await svAPI("/panels/" + d.id + "/test", { method: "POST" });
     toast(
       r.health.ok
-        ? L("اتصال موفق", "Connection successful")
+        ? r.health.limited
+          ? L(
+              "اتصال موفق (دسترسی محدود نمایندگی — فروش فعال است)",
+              "Connected (limited reseller access — sales work)",
+            )
+          : L("اتصال موفق", "Connection successful")
         : vError(r.health.error),
       r.health.ok ? "success" : "error",
     );
